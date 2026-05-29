@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Keyword {
+  id              Int              @id @default(autoincrement())
+  term            String           @unique
+  enabled         Boolean          @default(true)
+  hotspotKeywords HotspotKeyword[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model Setting {
+  id                      Int      @id @default(autoincrement())
+  scope                   String   @default("AI 编程")
+  aiProvider              String   @default("openrouter")
+  scanIntervalMinutes     Int      @default(30)
+  emailEnabled            Boolean  @default(false)
+  websocketEnabled        Boolean  @default(true)
+  recipientEmail          String?
+  relevanceThreshold      Int      @default(70)
+  importanceThreshold     String   @default("high")
+  bingSourceEnabled       Boolean  @default(true)
+  googleNewsSourceEnabled Boolean  @default(true)
+  hackerNewsSourceEnabled Boolean  @default(true)
+  twitterSourceEnabled    Boolean  @default(true)
+  bilibiliSourceEnabled   Boolean  @default(true)
+  weiboSourceEnabled      Boolean  @default(true)
+  sogouSourceEnabled      Boolean  @default(true)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model Hotspot {
+  id                Int              @id @default(autoincrement())
+  title             String
+  snippet           String?
+  url               String
+  canonicalUrl      String?
+  sourceType        String
+  sourceAuthor      String?
+  sourcePublishedAt DateTime?
+  engagementJson    String?
+  dedupeKey         String           @unique
+  titleNormalized   String
+  aiIsReal          Boolean?
+  aiRelevance       Int?
+  aiImportance      String?
+  aiSummary         String?
+  aiEvidence        String?
+  discoveredAt      DateTime         @default(now())
+  keywords          HotspotKeyword[]
+  notifications     NotificationLog[]
+
+  @@index([discoveredAt])
+  @@index([sourceType])
+  @@index([aiImportance])
+  @@index([aiIsReal])
+  @@index([titleNormalized])
+  @@index([canonicalUrl])
+}
+
+model HotspotKeyword {
+  id        Int      @id @default(autoincrement())
+  hotspotId Int
+  keywordId Int
+  createdAt DateTime @default(now())
+
+  hotspot Hotspot @relation(fields: [hotspotId], references: [id], onDelete: Cascade)
+  keyword Keyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([hotspotId, keywordId])
+}
+
+model NotificationLog {
+  id           Int      @id @default(autoincrement())
+  hotspotId     Int
+  channel       String
+  status        String
+  recipient     String?
+  errorMessage  String?
+  sentAt        DateTime @default(now())
+
+  hotspot Hotspot @relation(fields: [hotspotId], references: [id], onDelete: Cascade)
+
+  @@index([channel, status])
+  @@index([sentAt])
+}

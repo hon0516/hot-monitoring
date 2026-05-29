@@ -1,0 +1,19 @@
+{
+  "name": "hot-monitoring",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently \"npm --prefix server run dev\" \"npm --prefix web run dev\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "npm --prefix server run build",
+    "build:web": "npm --prefix web run build",
+    "db:generate": "npm --prefix server run prisma:generate",
+    "db:init": "npm --prefix server run prisma:deploy",
+    "db:push": "npm --prefix server run prisma:push"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

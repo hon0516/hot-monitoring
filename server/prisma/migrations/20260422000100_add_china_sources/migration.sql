@@ -1,0 +1,5 @@
+ALTER TABLE "Setting" ADD COLUMN "bilibiliSourceEnabled" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "Setting" ADD COLUMN "weiboSourceEnabled" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "Setting" ADD COLUMN "sogouSourceEnabled" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "Setting" ADD COLUMN "bilibiliHotEnabled" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "Setting" ADD COLUMN "weiboHotEnabled" BOOLEAN NOT NULL DEFAULT true;
