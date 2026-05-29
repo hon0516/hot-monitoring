@@ -1,0 +1,16 @@
+node_modules
+dist
+.DS_Store
+.env
+server/dev.db
+server/dev.db-journal
+server/prisma/dev.db
+server/prisma/dev.db-journal
+web/node_modules
+server/node_modules
+coverage
+
+
+# Local Netlify folder
+.netlify
+.playwright-mcp

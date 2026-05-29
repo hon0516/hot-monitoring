@@ -1,0 +1,31 @@
+{
+  "name": "hot-monitoring-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "dotenv -e ../.env -- node --watch src/index.js",
+    "build": "node --check src/index.js",
+    "start": "dotenv -e ../.env -- node src/index.js",
+    "prisma:generate": "dotenv -e ../.env -- prisma generate",
+    "prisma:push": "dotenv -e ../.env -- prisma db push",
+    "prisma:deploy": "dotenv -e ../.env -- prisma migrate deploy",
+    "db:init": "sqlite3 prisma/dev.db < prisma/init.sql",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.6.0",
+    "cheerio": "1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "node-cron": "^4.0.7",
+    "nodemailer": "^6.10.1",
+    "prisma": "^6.6.0",
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^8.0.0",
+    "vitest": "^3.1.1"
+  }
+}
