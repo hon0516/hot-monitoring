@@ -1,5 +1,5 @@
 <template>
-  <section class="glass-card flex h-full min-h-0 flex-col rounded-[28px] p-4">
+  <section class="glass-card flex h-full min-h-0 flex-col rounded-[10px] p-4">
     <div
       v-if="showHeader || $slots.actions"
       class="flex items-center justify-between"
@@ -23,13 +23,14 @@
           <article
             v-for="item in items"
             :key="item.id"
-            class="rounded-[20px] border border-white/5 bg-white/[0.03] p-3.5 transition hover:border-cyan/35 hover:bg-cyan/[0.05]"
+            class="rounded-[10px] border border-white/5 bg-white/[0.03] p-3.5 transition hover:border-cyan/35 hover:bg-cyan/[0.05]"
           >
             <div class="space-y-2.5">
               <div class="flex flex-wrap items-center gap-1.5">
-                <el-tag size="small" round effect="light" type="info">{{ sourceLabel(item.sourceType) }}</el-tag>
+                <el-tag class="hotspot-chip hotspot-chip--source" size="small" round effect="light" type="info">{{ sourceLabel(item.sourceType) }}</el-tag>
                 <el-tag
-                  v-if="item.aiImportance"
+                  v-if="mode === 'monitor' && item.aiImportance"
+                  class="hotspot-chip hotspot-chip--trust"
                   size="small"
                   round
                   effect="dark"
@@ -37,11 +38,19 @@
                 >
                   {{ importanceLabel(item.aiImportance, item.aiIsReal) }}
                 </el-tag>
-                <el-tag v-else size="small" round effect="dark" type="warning">
+                <el-tag
+                  v-else-if="mode === 'monitor'"
+                  class="hotspot-chip hotspot-chip--trust"
+                  size="small"
+                  round
+                  effect="dark"
+                  type="warning"
+                >
                   待 AI 复核
                 </el-tag>
                 <el-tag
-                  v-if="item.aiRelevance !== null && item.aiRelevance !== undefined"
+                  v-if="mode === 'monitor' && item.aiRelevance !== null && item.aiRelevance !== undefined"
+                  class="hotspot-chip hotspot-chip--relevance"
                   size="small"
                   round
                   effect="plain"
@@ -49,10 +58,28 @@
                 >
                   相关度 {{ item.aiRelevance }}
                 </el-tag>
-                <el-tag v-else size="small" round effect="plain" type="warning">
+                <el-tag
+                  v-else-if="mode === 'monitor'"
+                  class="hotspot-chip hotspot-chip--relevance"
+                  size="small"
+                  round
+                  effect="plain"
+                  type="warning"
+                >
                   可信度待补齐
                 </el-tag>
                 <el-tag
+                  class="hotspot-chip hotspot-chip--trust"
+                  size="small"
+                  round
+                  effect="plain"
+                  type="success"
+                  v-if="mode === 'search'"
+                >
+                  即时搜索
+                </el-tag>
+                <el-tag
+                  class="hotspot-chip hotspot-chip--keyword"
                   v-for="keyword in item.keywords"
                   :key="keyword.keyword?.term || keyword"
                   size="small"
@@ -60,6 +87,15 @@
                   effect="plain"
                 >
                   {{ keyword.keyword?.term || keyword }}
+                </el-tag>
+                <el-tag
+                  v-if="mode === 'monitor' && hasDirectMention(item)"
+                  class="hotspot-chip hotspot-chip--direct"
+                  size="small"
+                  round
+                  effect="dark"
+                >
+                  直接提及
                 </el-tag>
               </div>
 
@@ -69,16 +105,18 @@
                     :href="item.url"
                     target="_blank"
                     type="primary"
-                    :underline="false"
+                    underline="never"
                     class="font-display text-base leading-7 !text-white hover:!text-cyan"
                   >
                     {{ item.title }}
                   </el-link>
                   <p class="mt-1.5 max-w-3xl text-[13px] leading-5 text-slate-300/80">
-                    <span class="mr-1.5 text-[10px] font-mono uppercase tracking-[0.18em] text-cyan/80">AI摘要</span>
-                    {{ item.aiSummary || item.snippet || '待 AI 分析后补齐摘要' }}
+                    <span class="mr-1.5 text-[10px] font-mono uppercase tracking-[0.18em] text-cyan/80">
+                      {{ mode === 'search' ? '内容摘要' : 'AI摘要' }}
+                    </span>
+                    {{ formatSummary(item) }}
                   </p>
-                  <details class="mt-1 max-w-3xl text-[13px] text-slate-300/85">
+                  <details v-if="mode === 'monitor'" class="mt-1 max-w-3xl text-[13px] text-slate-300/85">
                     <summary class="cursor-pointer text-[12px] text-slate-300">
                       <span class="mr-1.5 text-[10px] font-mono uppercase tracking-[0.18em] text-cyan/65">AI判断依据</span>
                       <span class="text-slate-400">展开查看可信 / 存疑理由</span>
@@ -90,15 +128,21 @@
                     </ul>
                   </details>
                   <div class="hotspot-meta mt-2">
-                    <span
+                    <el-tooltip
                       v-for="meta in buildMetaItems(item)"
                       :key="meta.key"
-                      class="hotspot-meta__item"
-                      :title="`${meta.label}：${meta.value}`"
+                      :content="meta.tooltip || meta.label"
+                      placement="top"
+                      effect="dark"
                     >
-                      <el-icon class="hotspot-meta__icon"><component :is="meta.icon" /></el-icon>
-                      <span class="hotspot-meta__value">{{ meta.value }}</span>
-                    </span>
+                      <span
+                        class="hotspot-meta__item"
+                        :aria-label="meta.tooltip || meta.label"
+                      >
+                        <el-icon class="hotspot-meta__icon"><component :is="meta.icon" /></el-icon>
+                        <span class="hotspot-meta__value">{{ meta.value }}</span>
+                      </span>
+                    </el-tooltip>
                   </div>
                 </div>
               </div>
@@ -106,11 +150,11 @@
           </article>
         </div>
 
-        <div v-else class="flex h-full items-center justify-center rounded-[20px] border border-dashed border-cyan/20 bg-cyan/[0.03] px-5 py-8">
-          <el-empty description="热点流还没有启动">
+        <div v-else class="flex h-full items-center justify-center rounded-[10px] border border-dashed border-cyan/20 bg-cyan/[0.03] px-5 py-8">
+          <el-empty :description="emptyDescription">
             <template #default>
               <p class="mx-auto mt-3 max-w-2xl text-center text-[13px] leading-5 text-slate-400">
-                先在关键词页添加测试词，再执行一次扫描。现在会同时聚合必应资讯、谷歌资讯、Hacker News、推特，以及哔哩哔哩、微博、搜狗和热榜补充源。
+                {{ emptyHint }}
               </p>
             </template>
           </el-empty>
@@ -126,12 +170,13 @@ import {
   Check,
   Clock,
   RefreshRight,
+  Share,
   Star,
   User,
   View
 } from '@element-plus/icons-vue';
 
-defineProps({
+const props = defineProps({
   items: {
     type: Array,
     default: () => []
@@ -143,6 +188,18 @@ defineProps({
   showHeader: {
     type: Boolean,
     default: true
+  },
+  mode: {
+    type: String,
+    default: 'monitor'
+  },
+  emptyDescription: {
+    type: String,
+    default: '热点流还没有启动'
+  },
+  emptyHint: {
+    type: String,
+    default: '先在关键词页添加测试词，再执行一次扫描。现在会同时聚合必应资讯、谷歌资讯、Hacker News、推特，以及哔哩哔哩、微博、搜狗和热榜补充源。'
   }
 });
 
@@ -167,6 +224,23 @@ function importanceLabel(importance, isReal) {
   };
 
   return labels[importance] || '待验证';
+}
+
+function hasDirectMention(item) {
+  return String(item?.aiSummary || '').trim().startsWith('【直接提及】');
+}
+
+function formatSummary(item) {
+  const summary = String(item?.aiSummary || '').trim();
+  if (summary) {
+    return summary.replace(/^【直接提及】/u, '').trim();
+  }
+
+  if (item?.snippet) {
+    return item.snippet;
+  }
+
+  return props.mode === 'search' ? '搜索渠道暂未返回摘要内容。' : '待 AI 分析后补齐摘要';
 }
 
 function sourceLabel(sourceType) {
@@ -208,7 +282,7 @@ function extractMetrics(engagementJson) {
     ['views', '阅读', View],
     ['reads', '阅读', View],
     ['likes', '点赞', Star],
-    ['retweets', '转发', RefreshRight],
+    ['retweets', '转发', Share],
     ['replies', '评论', ChatDotRound],
     ['comments', '评论', ChatDotRound]
   ];
@@ -218,6 +292,7 @@ function extractMetrics(engagementJson) {
     .map(([key, label, icon]) => ({
       key,
       label,
+      tooltip: `${label}量`,
       icon,
       value: formatCount(engagement[key])
     }));
@@ -247,6 +322,7 @@ function buildMetaItems(item) {
     items.push({
       key: 'author',
       label: '作者',
+      tooltip: '作者名称',
       icon: User,
       value: item.sourceAuthor
     });
@@ -256,6 +332,7 @@ function buildMetaItems(item) {
     items.push({
       key: 'verified',
       label: '认证',
+      tooltip: '账号认证状态',
       icon: Check,
       value: '已认证'
     });
@@ -265,6 +342,7 @@ function buildMetaItems(item) {
     items.push({
       key: 'followers',
       label: '粉丝',
+      tooltip: '粉丝数量',
       icon: User,
       value: formatCount(author.followers)
     });
@@ -274,8 +352,19 @@ function buildMetaItems(item) {
     items.push({
       key: 'publishedAt',
       label: '发布时间',
+      tooltip: '内容发布时间',
       icon: Clock,
       value: formatRelativeTime(item.sourcePublishedAt)
+    });
+  }
+
+  if (item.discoveredAt) {
+    items.push({
+      key: 'discoveredAt',
+      label: '扫描时间',
+      tooltip: '系统扫描到该内容的时间',
+      icon: RefreshRight,
+      value: formatRelativeTime(item.discoveredAt)
     });
   }
 
@@ -345,11 +434,43 @@ function formatRelativeTime(value) {
   min-height: 22px;
   padding: 0 8px;
   border: 1px solid rgba(128, 156, 214, 0.12);
-  border-radius: 999px;
+  border-radius: 5px;
   background: rgba(255, 255, 255, 0.02);
   color: rgba(148, 163, 184, 0.9);
   font-size: 11px;
   line-height: 1;
+}
+
+:deep(.hotspot-chip) {
+  border-radius: 5px;
+}
+
+:deep(.hotspot-chip--direct) {
+  border-color: rgba(255, 214, 102, 0.45);
+  background: rgba(255, 214, 102, 0.16);
+  color: #ffe08a;
+}
+
+:deep(.hotspot-chip--source) {
+  border-color: rgba(123, 211, 255, 0.34);
+  background: rgba(55, 216, 255, 0.12);
+  color: #bff7ff;
+}
+
+:deep(.hotspot-chip--trust) {
+  font-weight: 600;
+}
+
+:deep(.hotspot-chip--relevance) {
+  border-color: rgba(102, 255, 194, 0.34);
+  background: rgba(32, 201, 151, 0.12);
+  color: #9dffd8;
+}
+
+:deep(.hotspot-chip--keyword) {
+  border-color: rgba(177, 156, 255, 0.34);
+  background: rgba(110, 131, 255, 0.12);
+  color: #d5ccff;
 }
 
 .hotspot-meta__icon {

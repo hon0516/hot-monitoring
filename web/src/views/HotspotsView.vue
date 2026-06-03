@@ -2,7 +2,7 @@
   <div class="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
     <HotspotFeed :items="sortedHotspots" :show-header="false">
       <template #actions>
-        <el-tag round effect="plain">{{ store.pagination.total }} 条记录</el-tag>
+        <el-tag class="hotspot-chip" round effect="plain">{{ store.pagination.total }} 条记录</el-tag>
       </template>
       <template #toolbar>
         <div ref="toolbarRoot" class="hotspot-toolbar">

@@ -8,9 +8,10 @@ const ANALYSIS_PROMPT = `
 2. 不要输出 reasoning、分析步骤、知识截止说明。
 3. 以输入中的 currentTime 为唯一当前时间依据，不要提“未来时间”“超出知识范围”“未发生”，除非输入文本自己明确这样写。
 4. 没有足够证据时，优先给中性判断，不要把缺少信息直接等同于假新闻。
-5. summary 必须填写，20-50 个字，概括这条内容在说什么。
-6. evidence 必须填写 2-4 条，每条 10-36 个字，写成具体信号，不要空数组。
-7. relevance 是 0-100 整数；importance 只能是 low、medium、high、urgent。
+5. summary 必须填写，20-60 个字，优先说明这条内容和 keyword / scope 的关联，不要只复述标题。
+6. 如果标题或摘要里直接出现了 keyword，对 summary 的表述要明确这是“直接提及”。
+7. evidence 必须填写 2-4 条，每条 10-36 个字，写成具体信号，不要空数组。
+8. relevance 是 0-100 整数；importance 只能是 low、medium、high、urgent。
 
 判断参考：
 - isReal=true：来自较可靠来源、叙述具体、时间线自洽、像真实事件或真实讨论。
@@ -23,7 +24,7 @@ const ANALYSIS_PROMPT = `
   "isReal": true,
   "relevance": 78,
   "importance": "medium",
-  "summary": "一句中文摘要，20到50字。",
+  "summary": "一句中文关联说明，20到60字。",
   "evidence": ["依据1", "依据2"]
 }
 `;
@@ -35,7 +36,8 @@ const AI_PROVIDERS = {
     endpoint: () => `${String(env.tencentTokenHubBaseUrl || '').replace(/\/+$/, '')}/chat/completions`,
     apiKey: () => env.tencentTokenHubApiKey,
     model: () => env.tencentTokenHubModel,
-    supportsJsonResponseFormat: false
+    supportsJsonResponseFormat: true,
+    disableThinking: true
   },
   openrouter: {
     label: 'OpenRouter',
@@ -109,6 +111,12 @@ async function requestAnalysis({ provider, payload, prompt = ANALYSIS_PROMPT, ma
   if (config.supportsJsonResponseFormat) {
     body.response_format = {
       type: 'json_object'
+    };
+  }
+
+  if (config.disableThinking) {
+    body.thinking = {
+      type: 'disabled'
     };
   }
 
@@ -201,7 +209,7 @@ export async function analyzeHotspot({ settings, scope, keyword, item }) {
     isReal: normalizeIsReal(parsed.isReal),
     relevance: normalizeRelevance(parsed.relevance),
     importance: normalizeImportance(parsed.importance),
-    summary: normalizeSummary(parsed.summary, item),
+    summary: normalizeSummary(parsed.summary, item, keyword),
     evidence: normalizeEvidence(parsed.evidence, item, currentTime)
   };
 }
@@ -243,13 +251,42 @@ function normalizeImportance(value) {
   return ['low', 'medium', 'high', 'urgent'].includes(value) ? value : 'medium';
 }
 
-function normalizeSummary(value, item) {
+function normalizeSummary(value, item, keyword) {
   const summary = String(value || '').trim();
-  if (summary) {
-    return summary.slice(0, 120);
+  const fallback = String(item?.snippet || item?.title || '信息不足，需结合原文进一步确认。').trim();
+  const base = summary || fallback;
+
+  if (!keyword) {
+    return base.slice(0, 120);
   }
 
-  return String(item?.snippet || item?.title || '信息不足，需结合原文进一步确认。').slice(0, 120);
+  if (base.startsWith('此内容与【') || base.startsWith('【直接提及】此内容与【')) {
+    return base.slice(0, 120);
+  }
+
+  const directMention = hasDirectKeywordMention(keyword, item);
+  const prefix = directMention ? '【直接提及】' : '';
+  return `${prefix}此内容与【${keyword}】的关联：${stripTrailingPunctuation(base)}`.slice(0, 120);
+}
+
+function hasDirectKeywordMention(keyword, item) {
+  const needle = normalizeKeyword(keyword);
+  if (!needle) {
+    return false;
+  }
+
+  const haystack = normalizeKeyword([item?.title, item?.snippet].filter(Boolean).join(' '));
+  return haystack.includes(needle);
+}
+
+function normalizeKeyword(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s`~!@#$%^&*()\-_=+\[\]{}\\|;:'",.<>/?，。！？、；：“”‘’（）【】《》—]+/g, '');
+}
+
+function stripTrailingPunctuation(value) {
+  return String(value || '').trim().replace(/[。；;，,！!？?、]+$/g, '');
 }
 
 function normalizeEvidence(value, item, now) {

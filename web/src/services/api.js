@@ -31,6 +31,8 @@ export const api = {
   getSummary: () => request('/api/hotspots/summary'),
   runSearch: () => request('/api/hotspots/search', { method: 'POST', body: JSON.stringify({}) }),
   getSearchStatus: () => request('/api/hotspots/search/status'),
+  exploreHotspots: (query) =>
+    request('/api/hotspots/explore', { method: 'POST', body: JSON.stringify({ query }) }),
   getSettings: () => request('/api/settings'),
   updateSettings: (data) => request('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
   getNotifications: () => request('/api/notifications'),

@@ -1,5 +1,11 @@
 import express from 'express';
-import { getCollectionStatus, getHotspotById, listHotspots, triggerCollection } from '../services/hotspotService.js';
+import {
+  getCollectionStatus,
+  getHotspotById,
+  listHotspots,
+  searchHotspotsAcrossSources,
+  triggerCollection
+} from '../services/hotspotService.js';
 import { getDashboardSummary } from '../services/dashboardService.js';
 
 export const hotspotRouter = express.Router();
@@ -47,6 +53,18 @@ hotspotRouter.post('/search', async (_req, res, next) => {
 hotspotRouter.get('/search/status', async (_req, res, next) => {
   try {
     res.json(getCollectionStatus());
+  } catch (error) {
+    next(error);
+  }
+});
+
+hotspotRouter.post('/explore', async (req, res, next) => {
+  try {
+    res.json(
+      await searchHotspotsAcrossSources({
+        query: req.body?.query
+      })
+    );
   } catch (error) {
     next(error);
   }

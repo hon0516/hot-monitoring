@@ -8,15 +8,15 @@
         <HotspotFeed :items="store.hotspots.slice(0, 6)" title="高频信号流" />
 
         <div class="space-y-6">
-          <section class="glass-card rounded-[30px] p-5">
+          <section class="glass-card rounded-[10px] p-5">
             <p class="font-mono text-xs uppercase tracking-[0.35em] text-slate-500">系统脉冲</p>
             <h3 class="mt-2 font-display text-xl text-white">运行态势</h3>
             <div class="mt-6 space-y-4">
-              <div class="rounded-[24px] border border-white/5 bg-white/[0.03] p-4">
+              <div class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
                 <p class="text-sm text-slate-400">最近一次发现时间</p>
                 <p class="mt-2 font-display text-2xl text-cyan">{{ latestTime }}</p>
               </div>
-              <div class="rounded-[24px] border border-white/5 bg-white/[0.03] p-4">
+              <div class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
                 <p class="text-sm text-slate-400">配置状态</p>
                 <p class="mt-2 text-sm leading-7 text-slate-200">
                   {{ aiProviderTag }} / 推特 {{ twitterTag }} / SMTP {{ readyTag(store.settings?.hasSmtpConfig) }}

@@ -9,7 +9,7 @@
         @rename="({ keyword, term }) => store.renameKeyword(keyword, term)"
         @remove="store.removeKeyword"
       />
-      <section class="glass-card rounded-[30px] p-5">
+      <section class="glass-card rounded-[10px] p-5">
         <p class="font-mono text-xs uppercase tracking-[0.35em] text-slate-500">运营提示</p>
         <h3 class="mt-2 font-display text-xl text-white">监控建议</h3>
         <ul class="mt-6 space-y-4 text-sm leading-7 text-slate-300/80">

@@ -109,6 +109,17 @@ export const useMonitorStore = defineStore('monitor', {
     },
     socket: null,
     scanStatusPollTimer: null,
+    searchPanel: {
+      query: '',
+      items: [],
+      meta: {
+        total: 0,
+        sourceStats: {},
+        searchedAt: null,
+        enabledSources: []
+      },
+      loading: false
+    },
     lastSourceStats: {
       bing: 0,
       'google-news': 0,
@@ -198,6 +209,33 @@ export const useMonitorStore = defineStore('monitor', {
     },
     async fetchHealth() {
       this.systemHealth = await api.getHealth();
+    },
+    async searchAcrossSources(query) {
+      const trimmedQuery = String(query || '').trim();
+      if (!trimmedQuery) {
+        throw new Error('请输入要搜索的关键词');
+      }
+
+      this.searchPanel.loading = true;
+      try {
+        const data = await api.exploreHotspots(trimmedQuery);
+        this.searchPanel = {
+          query: trimmedQuery,
+          items: data.items || [],
+          meta: {
+            total: Number(data.meta?.total || 0),
+            sourceStats: data.meta?.sourceStats || {},
+            searchedAt: data.meta?.searchedAt || null,
+            enabledSources: data.meta?.enabledSources || []
+          },
+          loading: false
+        };
+        this.liveMessage = `即时搜索完成，命中 ${this.searchPanel.meta.total} 条结果`;
+        return data;
+      } catch (error) {
+        this.searchPanel.loading = false;
+        throw error;
+      }
     },
     async fetchScanStatus() {
       this.scanStatus = await api.getSearchStatus();

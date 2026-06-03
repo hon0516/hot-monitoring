@@ -1,5 +1,5 @@
 <template>
-  <section class="glass-card rounded-[30px] p-5">
+  <section class="glass-card rounded-[10px] p-5">
     <div class="mb-6">
       <p class="font-mono text-xs uppercase tracking-[0.35em] text-slate-500">通知日志</p>
       <h3 class="mt-2 font-display text-xl text-white">通知历史</h3>
@@ -9,10 +9,10 @@
       <article
         v-for="item in items"
         :key="item.id"
-        class="rounded-[20px] border border-white/5 bg-white/[0.03] px-4 py-4"
+        class="rounded-[10px] border border-white/5 bg-white/[0.03] px-4 py-4"
       >
         <div class="flex items-center justify-between gap-3">
-          <span class="rounded-full bg-white/5 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.3em] text-slate-300">
+          <span class="rounded-[10px] bg-white/5 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.3em] text-slate-300">
             {{ channelLabel(item.channel) }}
           </span>
           <span :class="item.status === 'sent' ? 'text-acid' : 'text-ember'" class="text-xs uppercase tracking-[0.25em]">

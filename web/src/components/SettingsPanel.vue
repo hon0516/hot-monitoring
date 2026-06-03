@@ -1,5 +1,5 @@
 <template>
-  <section class="glass-card rounded-[30px] p-5">
+  <section class="glass-card rounded-[10px] p-5">
     <div class="mb-6">
       <p class="font-mono text-xs uppercase tracking-[0.35em] text-slate-500">控制中心</p>
       <h3 class="mt-2 font-display text-xl text-white">策略与通知</h3>
@@ -9,21 +9,21 @@
     </div>
 
     <div class="mb-5 grid gap-3 md:grid-cols-3">
-      <div class="rounded-[24px] border border-acid/15 bg-acid/[0.05] px-4 py-4">
+      <div class="rounded-[10px] border border-acid/15 bg-acid/[0.05] px-4 py-4">
         <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">模型接入</p>
         <p class="mt-3 text-sm text-white">{{ aiProviderTitle }}</p>
         <p class="mt-1 text-sm" :class="settings.aiProviderAvailable ? 'text-acid' : 'text-ember'">
           {{ settings.aiProviderAvailable ? 'AI 分析可用' : '当前提供方未就绪' }}
         </p>
       </div>
-      <div class="rounded-[24px] border border-cyan/15 bg-cyan/[0.05] px-4 py-4">
+      <div class="rounded-[10px] border border-cyan/15 bg-cyan/[0.05] px-4 py-4">
         <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">来源接入</p>
         <p class="mt-3 text-sm text-white">Twitter 接口</p>
         <p class="mt-1 text-sm" :class="twitterStatusClass">
           {{ twitterStatusText }}
         </p>
       </div>
-      <div class="rounded-[24px] border border-ember/15 bg-ember/[0.05] px-4 py-4">
+      <div class="rounded-[10px] border border-ember/15 bg-ember/[0.05] px-4 py-4">
         <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">通知投递</p>
         <p class="mt-3 text-sm text-white">SMTP 邮件</p>
         <p class="mt-1 text-sm" :class="settings.hasSmtpConfig ? 'text-acid' : 'text-ember'">
@@ -33,7 +33,7 @@
     </div>
 
     <el-form class="space-y-5" label-position="top" @submit.prevent="submit">
-      <section class="rounded-[26px] border border-white/5 bg-white/[0.03] p-4">
+      <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <div class="mb-4">
           <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">AI 提供方</p>
           <p class="mt-2 text-sm text-slate-400">手动切换热点分析所使用的模型提供方。当前版本仅保留腾讯 TokenHub 与 OpenRouter。</p>
@@ -51,7 +51,7 @@
             <div
               v-for="provider in aiProviderCards"
               :key="provider.key"
-              class="rounded-2xl border px-4 py-4"
+              class="rounded-[10px] border px-4 py-4"
               :class="provider.active ? 'border-cyan/35 bg-cyan/[0.05]' : 'border-white/5 bg-slate-950/40'"
             >
               <div class="flex items-center justify-between gap-3">
@@ -69,7 +69,7 @@
         </div>
       </section>
 
-      <section class="rounded-[26px] border border-white/5 bg-white/[0.03] p-4">
+      <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <div class="mb-4">
           <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">扫描节奏</p>
           <p class="mt-2 text-sm text-slate-400">设置系统自动扫描热点的间隔。保存后后端会立即按新的频率重载定时任务。</p>
@@ -87,7 +87,7 @@
             </el-select>
           </el-form-item>
 
-          <div class="rounded-2xl border border-white/5 bg-slate-950/40 px-4 py-4">
+          <div class="rounded-[10px] border border-white/5 bg-slate-950/40 px-4 py-4">
             <p class="text-sm text-white">当前自动扫描</p>
             <p class="mt-2 text-lg text-cyan">每 {{ form.scanIntervalMinutes }} 分钟一次</p>
             <p class="mt-2 text-xs leading-5 text-slate-500">
@@ -97,7 +97,7 @@
         </div>
       </section>
 
-      <section class="rounded-[26px] border border-white/5 bg-white/[0.03] p-4">
+      <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <div class="mb-4">
           <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">范围与阈值</p>
           <p class="mt-2 text-sm text-slate-400">设定监控话题范围，以及什么样的结果值得打断你。</p>
@@ -122,7 +122,7 @@
         </div>
       </section>
 
-      <section class="rounded-[26px] border border-white/5 bg-white/[0.03] p-4">
+      <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <div class="mb-4">
           <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">搜索来源</p>
           <p class="mt-2 text-sm text-slate-400">按需启用或停用各搜索源，停用后扫描时会直接跳过该来源。</p>
@@ -135,7 +135,7 @@
               <div
                 v-for="source in searchSourceCards"
                 :key="source.key"
-                class="flex items-start justify-between rounded-2xl border border-white/5 bg-slate-950/40 px-4 py-4"
+                class="flex items-start justify-between rounded-[10px] border border-white/5 bg-slate-950/40 px-4 py-4"
               >
                 <div>
                   <p class="text-sm text-white">{{ source.title }}</p>
@@ -150,7 +150,7 @@
         </div>
       </section>
 
-      <section class="rounded-[26px] border border-white/5 bg-white/[0.03] p-4">
+      <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <div class="mb-4">
           <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">通知渠道</p>
           <p class="mt-2 text-sm text-slate-400">浏览器推送适合即时追踪，邮件适合保留高价值热点留痕。</p>
@@ -161,14 +161,14 @@
         </el-form-item>
 
         <div class="mt-4 grid gap-4 md:grid-cols-2">
-          <div class="flex items-start justify-between rounded-2xl border border-white/5 bg-slate-950/40 px-4 py-4">
+          <div class="flex items-start justify-between rounded-[10px] border border-white/5 bg-slate-950/40 px-4 py-4">
             <div>
               <p class="text-sm text-white">浏览器推送</p>
               <p class="mt-1 text-xs leading-5 text-slate-500">实时把新热点推到当前打开的监控面板。</p>
             </div>
             <el-switch v-model="form.websocketEnabled" />
           </div>
-          <div class="flex items-start justify-between rounded-2xl border border-white/5 bg-slate-950/40 px-4 py-4">
+          <div class="flex items-start justify-between rounded-[10px] border border-white/5 bg-slate-950/40 px-4 py-4">
             <div>
               <p class="text-sm text-white">邮件通知</p>
               <p class="mt-1 text-xs leading-5 text-slate-500">仅建议在 SMTP 配好后开启，用来接收高价值热点快照。</p>
@@ -187,22 +187,22 @@
         />
       </section>
 
-      <div class="rounded-[24px] border border-white/5 bg-white/[0.03] p-4">
+      <div class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <p class="font-mono text-xs uppercase tracking-[0.35em] text-slate-500">配置状态</p>
         <div class="mt-4 grid gap-3 md:grid-cols-3">
-          <div class="rounded-2xl border border-white/5 px-3 py-3 text-sm text-slate-300">
+          <div class="rounded-[10px] border border-white/5 px-3 py-3 text-sm text-slate-300">
             {{ aiProviderTitle }}：
             <span :class="settings.aiProviderAvailable ? 'text-acid' : 'text-ember'">
               {{ settings.aiProviderAvailable ? ' 已就绪' : ' 缺失' }}
             </span>
           </div>
-          <div class="rounded-2xl border border-white/5 px-3 py-3 text-sm text-slate-300">
+          <div class="rounded-[10px] border border-white/5 px-3 py-3 text-sm text-slate-300">
             Twitter 接口：
             <span :class="twitterStatusClass">
               {{ twitterConfigLabel }}
             </span>
           </div>
-          <div class="rounded-2xl border border-white/5 px-3 py-3 text-sm text-slate-300">
+          <div class="rounded-[10px] border border-white/5 px-3 py-3 text-sm text-slate-300">
             SMTP：
             <span :class="settings.hasSmtpConfig ? 'text-acid' : 'text-ember'">
               {{ settings.hasSmtpConfig ? ' 已就绪' : ' 缺失' }}

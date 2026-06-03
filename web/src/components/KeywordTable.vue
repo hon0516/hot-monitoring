@@ -1,5 +1,5 @@
 <template>
-  <section class="glass-card rounded-[30px] p-5">
+  <section class="glass-card rounded-[10px] p-5">
     <div class="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
       <div>
         <p class="font-mono text-xs uppercase tracking-[0.35em] text-slate-500">关键词矩阵</p>
@@ -15,7 +15,7 @@
     </div>
 
     <div class="space-y-3">
-      <div v-if="!items.length" class="rounded-[24px] border border-dashed border-cyan/20 bg-cyan/[0.03] px-5 py-6">
+      <div v-if="!items.length" class="rounded-[10px] border border-dashed border-cyan/20 bg-cyan/[0.03] px-5 py-6">
         <p class="font-display text-lg text-white">当前还没有监控关键词</p>
         <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
           可以先从 1-2 个高信号词开始，跑通链路后再扩展到品牌、模型代号和竞品组合词。
@@ -30,7 +30,7 @@
       <div
         v-for="keyword in items"
         :key="keyword.id"
-        class="flex flex-col gap-3 rounded-[22px] border border-white/5 bg-white/[0.03] px-4 py-4 lg:flex-row lg:items-center lg:justify-between"
+        class="flex flex-col gap-3 rounded-[10px] border border-white/5 bg-white/[0.03] px-4 py-4 lg:flex-row lg:items-center lg:justify-between"
       >
         <div>
           <p class="font-display text-lg text-white">{{ keyword.term }}</p>

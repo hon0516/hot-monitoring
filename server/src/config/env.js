@@ -30,7 +30,7 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL || 'file:./prisma/dev.db',
   tencentTokenHubApiKey: process.env.TENCENT_TOKENHUB_API_KEY || '',
   tencentTokenHubBaseUrl: process.env.TENCENT_TOKENHUB_BASE_URL || 'https://tokenhub.tencentmaas.com/v1',
-  tencentTokenHubModel: process.env.TENCENT_TOKENHUB_MODEL || 'deepseek-v4-flash',
+  tencentTokenHubModel: process.env.TENCENT_TOKENHUB_MODEL || 'deepseek-v4-pro-202606',
   openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
   openRouterModel: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
   aiAnalysisTimeoutMs: Math.min(120000, Math.max(5000, toInt(process.env.AI_ANALYSIS_TIMEOUT_MS, 30000))),

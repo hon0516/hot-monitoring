@@ -1,5 +1,5 @@
 <template>
-  <section class="glass-card rounded-[26px] p-4">
+  <section class="glass-card rounded-[10px] p-4">
     <div
       v-if="showHeader || total"
       class="flex items-start justify-between gap-3"
@@ -17,7 +17,7 @@
       <article
         v-for="item in normalizedItems"
         :key="item.key"
-        class="source-coverage-card rounded-[18px] px-3.5 py-3"
+        class="source-coverage-card rounded-[10px] px-3.5 py-3"
       >
         <div class="flex items-center gap-3">
           <span class="source-coverage-card__icon" :class="item.iconClass" aria-hidden="true">
@@ -171,7 +171,7 @@ const normalizedItems = computed(() => {
   flex: none;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid currentColor;
   background: rgba(255, 255, 255, 0.03);
   font-size: 16px;

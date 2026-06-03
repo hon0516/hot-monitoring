@@ -364,6 +364,55 @@ function buildSourceStats() {
   return Object.fromEntries([...KEYWORD_SOURCE_CONFIGS, ...HOT_SOURCE_CONFIGS].map((source) => [source.name, 0]));
 }
 
+function getEnabledKeywordSources(settings) {
+  return KEYWORD_SOURCE_CONFIGS.filter((source) => settings[source.enabledKey] !== false);
+}
+
+function buildSearchResultId(item, fallbackIndex) {
+  const canonicalSource = String(item.url || item.title || fallbackIndex || 'search')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+
+  return `${item.sourceType || 'search'}:${canonicalSource}`;
+}
+
+function compareSearchItems(left, right) {
+  const rightPublishedAt = new Date(right?.sourcePublishedAt || right?.discoveredAt || 0).getTime();
+  const leftPublishedAt = new Date(left?.sourcePublishedAt || left?.discoveredAt || 0).getTime();
+  const publishedDiff = rightPublishedAt - leftPublishedAt;
+  if (publishedDiff !== 0) {
+    return publishedDiff;
+  }
+
+  const rightDiscoveredAt = new Date(right?.discoveredAt || 0).getTime();
+  const leftDiscoveredAt = new Date(left?.discoveredAt || 0).getTime();
+  return rightDiscoveredAt - leftDiscoveredAt;
+}
+
+function normalizeSearchResultItem({ item, query, fallbackIndex }) {
+  return {
+    id: buildSearchResultId(item, fallbackIndex),
+    title: item.title,
+    snippet: item.snippet || item.title,
+    url: item.url,
+    sourceType: item.sourceType,
+    sourceAuthor: item.sourceAuthor,
+    sourcePublishedAt: item.sourcePublishedAt || null,
+    engagementJson: item.engagementJson || null,
+    discoveredAt: new Date().toISOString(),
+    keywords: query
+      ? [
+          {
+            keyword: {
+              term: query
+            }
+          }
+        ]
+      : []
+  };
+}
+
 async function processSourceItems({
   source,
   settings,
@@ -496,7 +545,7 @@ export async function runCollection({ trigger = 'manual' } = {}) {
     }
   });
 
-  const keywordSources = KEYWORD_SOURCE_CONFIGS.filter((source) => settings[source.enabledKey] !== false);
+  const keywordSources = getEnabledKeywordSources(settings);
   const hotSources = HOT_SOURCE_CONFIGS.filter((source) => settings[source.enabledKey] !== false);
   const createdItems = [];
   const counters = {
@@ -581,5 +630,84 @@ export async function runCollection({ trigger = 'manual' } = {}) {
     skipAiForCurrentRun: counters.skipAiForCurrentRun,
     sourceStats,
     items: createdItems
+  };
+}
+
+export async function searchHotspotsAcrossSources({ query }) {
+  const trimmedQuery = String(query || '').trim();
+  if (!trimmedQuery) {
+    throw new Error('请输入要搜索的关键词');
+  }
+
+  const settings = await ensureSettings();
+  const enabledSources = getEnabledKeywordSources(settings);
+  const settledResults = await Promise.allSettled(
+    enabledSources.map(async (source) => {
+      const items = await source.runner({
+        keyword: trimmedQuery,
+        scope: ''
+      });
+
+      return {
+        source: source.name,
+        items: Array.isArray(items) ? items : []
+      };
+    })
+  );
+
+  const sourceStats = buildSourceStats();
+  const results = [];
+
+  settledResults.forEach((result, index) => {
+    const sourceName = enabledSources[index]?.name;
+    if (!sourceName) {
+      return;
+    }
+
+    if (result.status !== 'fulfilled') {
+      console.error(`[search:${sourceName}]`, result.reason?.message || result.reason || '即时搜索失败');
+      sourceStats[sourceName] = 0;
+      return;
+    }
+
+    sourceStats[sourceName] = result.value.items.length;
+    result.value.items.forEach((item, itemIndex) => {
+      if (!item?.title || !item?.url) {
+        return;
+      }
+
+      results.push(
+        normalizeSearchResultItem({
+          item,
+          query: trimmedQuery,
+          fallbackIndex: `${sourceName}-${itemIndex}`
+        })
+      );
+    });
+  });
+
+  const dedupedResults = Array.from(
+    results.reduce((map, item) => {
+      const dedupeKey = `${item.url || ''}::${item.title || ''}`.trim().toLowerCase();
+      if (!dedupeKey || map.has(dedupeKey)) {
+        return map;
+      }
+
+      map.set(dedupeKey, item);
+      return map;
+    }, new Map())
+  )
+    .map(([, item]) => item)
+    .sort(compareSearchItems);
+
+  return {
+    items: dedupedResults,
+    meta: {
+      query: trimmedQuery,
+      total: dedupedResults.length,
+      enabledSources: enabledSources.map((source) => source.name),
+      sourceStats,
+      searchedAt: new Date().toISOString()
+    }
   };
 }

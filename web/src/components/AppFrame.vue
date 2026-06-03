@@ -3,7 +3,7 @@
     <el-container class="mx-auto box-border h-full max-w-[1600px] px-4 py-4 lg:px-5">
       <el-main class="flex h-full min-w-0 flex-1 flex-col gap-3 overflow-hidden p-0">
         <header class="flex flex-col gap-3">
-          <section class="glass-card scanline hero-banner rounded-[24px] px-5 py-3.5 lg:px-7 lg:py-4">
+          <section class="glass-card scanline hero-banner rounded-[10px] px-5 py-3.5 lg:px-7 lg:py-4">
             <div class="hero-banner__glow"></div>
             <div class="hero-banner__frame"></div>
             <div class="hero-banner__content relative z-[1]">
@@ -12,7 +12,7 @@
             </div>
           </section>
 
-          <section class="glass-card rounded-[24px] px-4 py-3">
+          <section class="glass-card rounded-[10px] px-4 py-3">
             <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <nav class="app-tabs flex flex-wrap gap-2">
                 <RouterLink
@@ -69,7 +69,8 @@ const route = useRoute();
 const navItems = [
   { to: '/hotspots', label: '热点流', code: '01' },
   { to: '/keywords', label: '关键词', code: '02' },
-  { to: '/settings', label: '系统设置', code: '03' }
+  { to: '/search', label: '搜索', code: '03' },
+  { to: '/settings', label: '系统设置', code: '04' }
 ];
 
 </script>
