@@ -49,12 +49,13 @@ def relevance_score(keyword, item):
 
 def classify_type(item):
     text = text_of(item).casefold()
+    explicit_type = str(item.get("candidateType") or "").strip()
+    if explicit_type:
+        return explicit_type
     if any(word in text for word in NOISE_WORDS):
         return "search_noise"
     if any(word.casefold() in text for word in TUTORIAL_WORDS):
         return "tutorial_or_collection"
-    if domain_of(item.get("url")).endswith(("openai.com", "anthropic.com", "microsoft.com", "googleblog.com")):
-        return "official_announcement"
     return item.get("candidateType") or "unknown"
 
 
@@ -158,4 +159,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
