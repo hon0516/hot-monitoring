@@ -7,12 +7,18 @@ import {
   triggerCollection
 } from '../services/hotspotService.js';
 import { getDashboardSummary } from '../services/dashboardService.js';
+import {
+  getVerifiedEvent,
+  getVerifiedEventEvidence,
+  listVerifiedEvents,
+  saveVerificationFeedback
+} from '../services/deepVerificationService.js';
 
 export const hotspotRouter = express.Router();
 
 hotspotRouter.get('/', async (req, res, next) => {
   try {
-    const data = await listHotspots(req.query);
+    const data = await listVerifiedEvents(req.query);
     res.json(data);
   } catch (error) {
     next(error);
@@ -29,13 +35,34 @@ hotspotRouter.get('/summary', async (_req, res, next) => {
 
 hotspotRouter.get('/:id', async (req, res, next) => {
   try {
-    const item = await getHotspotById(Number(req.params.id));
+    const item = await getVerifiedEvent(Number(req.params.id));
     if (!item) {
       res.status(404).json({ message: '热点不存在' });
       return;
     }
 
     res.json(item);
+  } catch (error) {
+    next(error);
+  }
+});
+
+hotspotRouter.get('/:id/evidence', async (req, res, next) => {
+  try {
+    const item = await getVerifiedEventEvidence(Number(req.params.id));
+    if (!item) {
+      res.status(404).json({ message: '热点证据不存在' });
+      return;
+    }
+    res.json(item);
+  } catch (error) {
+    next(error);
+  }
+});
+
+hotspotRouter.post('/:id/feedback', async (req, res, next) => {
+  try {
+    res.status(201).json(await saveVerificationFeedback(Number(req.params.id), req.body));
   } catch (error) {
     next(error);
   }

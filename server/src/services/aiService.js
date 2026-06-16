@@ -1,33 +1,178 @@
 import { env, configState } from '../config/env.js';
+import { stripHtml } from '../sources/sourceClient.js';
 
 const ANALYSIS_PROMPT = `
-你是热点真假分析器。你的任务是基于输入字段，判断这条内容是否像“真实热点”，并给出结构化结论。
+你是关键词感知的热点审核器。基于 keyword、preMatch、title、snippet 和 ruleAudit，判断内容是否真实、是否直接相关。
 
-严格要求：
-1. 只输出一个 JSON 对象，不要输出解释、前后缀、Markdown、思考过程。
-2. 不要输出 reasoning、分析步骤、知识截止说明。
-3. 以输入中的 currentTime 为唯一当前时间依据，不要提“未来时间”“超出知识范围”“未发生”，除非输入文本自己明确这样写。
-4. 没有足够证据时，优先给中性判断，不要把缺少信息直接等同于假新闻。
-5. summary 必须填写，20-60 个字，优先说明这条内容和 keyword / scope 的关联，不要只复述标题。
-6. 如果标题或摘要里直接出现了 keyword，对 summary 的表述要明确这是“直接提及”。
-7. evidence 必须填写 2-4 条，每条 10-36 个字，写成具体信号，不要空数组。
+要求：
+1. 只输出一个 JSON 对象。
+2. 不要输出解释、Markdown、推理过程。
+3. 重点区分：真实存在、直接相关、值得作为热点展示。
+4. 同领域但没有直接提及 keyword 或等价说法，relevance 必须低于 60。
+5. 教程、合集、搜索结果页、营销内容即使包含 keyword，也默认 low 或 medium。
+6. summary 必须用中文，格式固定为：此内容与【keyword】的关联：...
+7. relevanceReason 用一句话解释相关性打分理由，不要写推理过程。
 8. relevance 是 0-100 整数；importance 只能是 low、medium、high、urgent。
 
-判断参考：
-- isReal=true：来自较可靠来源、叙述具体、时间线自洽、像真实事件或真实讨论。
-- isReal=false：明显夸张、营销标题、表述失真、来源可疑、缺少基本事实支撑、像搜索噪音或误匹配。
-- relevance：和 scope、keyword 的相关程度，而不是新闻热度本身。
-- importance：对当前 scope 的业务价值，不是标题夸张程度。
-
-输出格式：
+返回：
 {
   "isReal": true,
+  "confidence": 72,
   "relevance": 78,
+  "relevanceReason": "标题直接提及关键词并讨论其产品更新。",
+  "keywordMentioned": true,
   "importance": "medium",
-  "summary": "一句中文关联说明，20到60字。",
-  "evidence": ["依据1", "依据2"]
+  "riskFlags": ["low_evidence"],
+  "summary": "此内容与【AI编程】的关联：..."
 }
 `;
+
+const MAX_ANALYSIS_TITLE_CHARS = 160;
+const MAX_ANALYSIS_SNIPPET_CHARS = 320;
+const MAX_ANALYSIS_OUTPUT_TOKENS = 120;
+const MAX_KEYWORD_VARIANTS = 12;
+
+const keywordExpansionCache = new Map();
+
+function trimText(value, maxLength) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function uniqueCompactList(items, limit = MAX_KEYWORD_VARIANTS) {
+  const seen = new Set();
+  const result = [];
+
+  for (const item of items) {
+    const value = String(item || '').replace(/\s+/g, ' ').trim();
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(value);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function splitKeywordParts(keyword) {
+  return String(keyword || '')
+    .split(/[\s\-_\/\\·|,，、]+/u)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2);
+}
+
+function addAiProgrammingAliases(keyword, variants) {
+  const normalized = normalizeKeyword(keyword);
+  if (!normalized.includes('ai') || !/(编程|代码|coding|programming|coder|code)/iu.test(keyword)) {
+    return;
+  }
+
+  variants.push('AI 编程', 'AI编程', 'AI coding', 'AI programming', 'AI code generation', 'AI coding agent');
+}
+
+export function expandKeyword(keyword) {
+  const normalizedKeyword = String(keyword || '').trim();
+  if (!normalizedKeyword) {
+    return [];
+  }
+
+  const cacheKey = normalizedKeyword.toLowerCase();
+  if (keywordExpansionCache.has(cacheKey)) {
+    return keywordExpansionCache.get(cacheKey);
+  }
+
+  const variants = [normalizedKeyword];
+  const parts = splitKeywordParts(normalizedKeyword);
+  variants.push(...parts);
+
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    variants.push(`${parts[index]} ${parts[index + 1]}`);
+    variants.push(`${parts[index]}-${parts[index + 1]}`);
+  }
+
+  if (/^[a-z0-9\s\-_./]+$/iu.test(normalizedKeyword)) {
+    variants.push(normalizedKeyword.replace(/[-_./]+/g, ' '));
+    variants.push(normalizedKeyword.replace(/\s+/g, '-'));
+  }
+
+  addAiProgrammingAliases(normalizedKeyword, variants);
+
+  const expanded = uniqueCompactList(variants);
+  keywordExpansionCache.set(cacheKey, expanded);
+  return expanded;
+}
+
+export function preMatchKeyword(text, expandedKeywords = []) {
+  const rawText = String(text || '').toLowerCase();
+  const comparableText = normalizeKeyword(text);
+  const matchedTerms = [];
+
+  for (const keyword of expandedKeywords) {
+    const rawKeyword = String(keyword || '').trim().toLowerCase();
+    const comparableKeyword = normalizeKeyword(keyword);
+    if (!rawKeyword || !comparableKeyword) {
+      continue;
+    }
+
+    if (rawText.includes(rawKeyword) || comparableText.includes(comparableKeyword)) {
+      matchedTerms.push(keyword);
+    }
+  }
+
+  return {
+    matched: matchedTerms.length > 0,
+    matchedTerms: uniqueCompactList(matchedTerms, 6)
+  };
+}
+
+function compactRuleAudit(evidencePackage) {
+  if (!evidencePackage) {
+    return null;
+  }
+
+  return {
+    auditVersion: evidencePackage.auditVersion,
+    sourceType: evidencePackage.sourceType,
+    hostname: evidencePackage.hostname,
+    sourceQualityScore: evidencePackage.sourceQualityScore,
+    ruleTrustScore: evidencePackage.ruleTrustScore,
+    ruleRelevanceScore: evidencePackage.ruleRelevanceScore,
+    contentType: evidencePackage.contentType,
+    keywordMatchType: evidencePackage.keywordMatchType,
+    riskFlags: Array.isArray(evidencePackage.riskFlags) ? evidencePackage.riskFlags.slice(0, 4) : [],
+    positiveSignals: Array.isArray(evidencePackage.positiveSignals) ? evidencePackage.positiveSignals.slice(0, 4) : [],
+    ruleEvidence: Array.isArray(evidencePackage.ruleEvidence)
+      ? evidencePackage.ruleEvidence.map((item) => trimText(item, 48)).slice(0, 3)
+      : []
+  };
+}
+
+function buildAnalysisPayload({ scope, keyword, item, evidencePackage, preMatch, currentTime }) {
+  return {
+    scope,
+    keyword,
+    currentTime: currentTime.toISOString(),
+    title: trimText(item?.title, MAX_ANALYSIS_TITLE_CHARS),
+    snippet: trimText(stripHtml(item?.snippet || ''), MAX_ANALYSIS_SNIPPET_CHARS),
+    sourceType: item?.sourceType || '',
+    publishedAt: item?.sourcePublishedAt || null,
+    preMatch: {
+      matched: Boolean(preMatch?.matched),
+      matchedTerms: Array.isArray(preMatch?.matchedTerms) ? preMatch.matchedTerms.slice(0, 6) : []
+    },
+    ruleAudit: compactRuleAudit(evidencePackage)
+  };
+}
 
 const AI_PROVIDERS = {
   'tencent-tokenhub': {
@@ -105,7 +250,7 @@ async function requestAnalysis({ provider, payload, prompt = ANALYSIS_PROMPT, ma
         content: JSON.stringify(payload)
       }
     ],
-    max_tokens: maxTokens ?? 220
+    max_tokens: maxTokens ?? MAX_ANALYSIS_OUTPUT_TOKENS
   };
 
   if (config.supportsJsonResponseFormat) {
@@ -178,25 +323,37 @@ async function requestAnalysis({ provider, payload, prompt = ANALYSIS_PROMPT, ma
   return response.json();
 }
 
-export async function analyzeHotspot({ settings, scope, keyword, item }) {
+export async function requestStructuredAnalysis({ settings, prompt, payload, maxTokens = 1200 }) {
+  const provider = normalizeAiProvider(settings?.aiProvider);
+  const responsePayload = await requestAnalysis({
+    provider,
+    payload,
+    prompt,
+    maxTokens
+  });
+
+  return {
+    provider,
+    value: parseAnalysisResponse(responsePayload)
+  };
+}
+
+export async function analyzeHotspot({ settings, scope, keyword, item, evidencePackage, preMatch, prompt = ANALYSIS_PROMPT }) {
   const provider = normalizeAiProvider(settings?.aiProvider);
   const currentTime = new Date();
-  const payload = {
+  const payload = buildAnalysisPayload({
     scope,
     keyword,
-    currentTime: currentTime.toISOString(),
-    currentTimeLabel: formatAnalysisDate(currentTime),
-    title: item.title,
-    snippet: item.snippet,
-    url: item.url,
-    sourceType: item.sourceType,
-    publishedAt: item.sourcePublishedAt,
-    publishedAtLabel: formatAnalysisDate(item.sourcePublishedAt)
-  };
+    item,
+    evidencePackage,
+    preMatch,
+    currentTime
+  });
 
   let responsePayload = await requestAnalysis({
     provider,
-    payload
+    payload,
+    prompt
   });
   let parsed = parseAnalysisResponse(responsePayload);
 
@@ -207,10 +364,14 @@ export async function analyzeHotspot({ settings, scope, keyword, item }) {
   return {
     provider,
     isReal: normalizeIsReal(parsed.isReal),
+    confidence: normalizeRelevance(parsed.confidence),
     relevance: normalizeRelevance(parsed.relevance),
+    relevanceReason: normalizeReason(parsed.relevanceReason),
+    keywordMentioned: normalizeKeywordMentioned(parsed.keywordMentioned, preMatch),
     importance: normalizeImportance(parsed.importance),
-    summary: normalizeSummary(parsed.summary, item, keyword),
-    evidence: normalizeEvidence(parsed.evidence, item, currentTime)
+    riskFlags: normalizeRiskFlags(parsed.riskFlags),
+    summary: buildHotspotSummary({ value: parsed.summary, item, keyword }),
+    evidence: normalizeEvidence(parsed.relevanceReason || parsed.evidence, item, currentTime)
   };
 }
 
@@ -251,22 +412,79 @@ function normalizeImportance(value) {
   return ['low', 'medium', 'high', 'urgent'].includes(value) ? value : 'medium';
 }
 
+function normalizeKeywordMentioned(value, preMatch) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return Boolean(preMatch?.matched);
+}
+
+function normalizeRiskFlags(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6);
+}
+
+function normalizeReason(value) {
+  return stripHtml(value || '').trim().slice(0, 160);
+}
+
 function normalizeSummary(value, item, keyword) {
-  const summary = String(value || '').trim();
-  const fallback = String(item?.snippet || item?.title || '信息不足，需结合原文进一步确认。').trim();
-  const base = summary || fallback;
+  return buildHotspotSummary({ value, item, keyword });
+}
+
+function summarizeFallbackText(item) {
+  const fallback = stripHtml(item?.snippet || item?.title || '信息不足，需结合原文进一步确认。').trim();
+  return fallback || '信息不足，需结合原文进一步确认。';
+}
+
+function buildFallbackRelationText(item, keyword) {
+  const cleanTitle = stripHtml(item?.title || '').trim();
+  const cleanSnippet = stripHtml(item?.snippet || '').trim();
+
+  if (!keyword) {
+    return summarizeFallbackText(item);
+  }
+
+  if (hasDirectKeywordMention(keyword, item)) {
+    if (cleanTitle) {
+      return `标题《${cleanTitle}》直接提及该关键词，需结合原文进一步确认具体关联`;
+    }
+
+    return `原始内容直接提及该关键词，需结合原文进一步确认具体关联`;
+  }
+
+  if (cleanTitle) {
+    return `标题《${cleanTitle}》疑似与该关键词相关，需结合原文进一步确认具体关联`;
+  }
+
+  if (cleanSnippet) {
+    return `原始内容提到相关线索，需结合原文进一步确认其与该关键词的具体关联`;
+  }
+
+  return '信息不足，需结合原文进一步确认其与该关键词的具体关联';
+}
+
+export function buildHotspotSummary({ value, item, keyword }) {
+  const summary = stripHtml(value || '').trim();
+  const base = summary || buildFallbackRelationText(item, keyword);
 
   if (!keyword) {
     return base.slice(0, 120);
   }
 
-  if (base.startsWith('此内容与【') || base.startsWith('【直接提及】此内容与【')) {
+  if (base.startsWith('【直接提及】此内容与【')) {
+    return base.replace(/^【直接提及】/u, '').slice(0, 120);
+  }
+
+  if (base.startsWith('此内容与【')) {
     return base.slice(0, 120);
   }
 
-  const directMention = hasDirectKeywordMention(keyword, item);
-  const prefix = directMention ? '【直接提及】' : '';
-  return `${prefix}此内容与【${keyword}】的关联：${stripTrailingPunctuation(base)}`.slice(0, 120);
+  return `此内容与【${keyword}】的关联：${stripTrailingPunctuation(base)}`.slice(0, 120);
 }
 
 function hasDirectKeywordMention(keyword, item) {
@@ -287,6 +505,10 @@ function normalizeKeyword(value) {
 
 function stripTrailingPunctuation(value) {
   return String(value || '').trim().replace(/[。；;，,！!？?、]+$/g, '');
+}
+
+export function normalizeSummaryForTest(value, item, keyword) {
+  return buildHotspotSummary({ value, item, keyword });
 }
 
 function normalizeEvidence(value, item, now) {

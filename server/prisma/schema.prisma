@@ -12,6 +12,7 @@ model Keyword {
   term            String           @unique
   enabled         Boolean          @default(true)
   hotspotKeywords HotspotKeyword[]
+  eventKeywords   HotspotEventKeyword[]
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 }
@@ -54,6 +55,13 @@ model Hotspot {
   aiImportance      String?
   aiSummary         String?
   aiEvidence        String?
+  auditStatus       String?
+  aiConfidence      Int?
+  trustScore        Int?
+  sourceQualityScore Int?
+  auditFlagsJson    String?
+  auditVersion      String?
+  corroborationCount Int             @default(0)
   discoveredAt      DateTime         @default(now())
   keywords          HotspotKeyword[]
   notifications     NotificationLog[]
@@ -62,6 +70,8 @@ model Hotspot {
   @@index([sourceType])
   @@index([aiImportance])
   @@index([aiIsReal])
+  @@index([auditStatus])
+  @@index([trustScore])
   @@index([titleNormalized])
   @@index([canonicalUrl])
 }
@@ -91,4 +101,184 @@ model NotificationLog {
 
   @@index([channel, status])
   @@index([sentAt])
+}
+
+model HotspotEvent {
+  id                     Int                   @id @default(autoincrement())
+  eventFingerprint       String                @unique
+  title                  String
+  summary                String?
+  primaryUrl             String?
+  primarySourceType      String?
+  primarySourceAuthor    String?
+  sourcePublishedAt      DateTime?
+  contentType            String                @default("news")
+  verificationStatus     String                @default("needs_review")
+  relevanceScore         Int                   @default(0)
+  evidenceScore          Int                   @default(0)
+  corroborationScore     Int                   @default(0)
+  contradictionScore     Int                   @default(0)
+  sourceQualityScore     Int                   @default(0)
+  trustScore             Int                   @default(0)
+  importance             String                @default("low")
+  independentSourceCount Int                   @default(0)
+  hasOfficialSource      Boolean               @default(false)
+  riskFlagsJson          String?
+  auditEvidenceJson      String?
+  auditVersion           String                @default("deep-verify-v1")
+  firstSeenAt            DateTime              @default(now())
+  lastSeenAt             DateTime              @updatedAt
+  verifiedAt             DateTime?
+  sourceItems            HotspotSourceItem[]
+  claims                 EventClaim[]
+  keywords               HotspotEventKeyword[]
+  feedback               VerificationFeedback[]
+  notifications          EventNotificationLog[]
+  scanInboxItems         LatestScanInboxItem[]
+
+  @@index([verificationStatus])
+  @@index([trustScore])
+  @@index([relevanceScore])
+  @@index([sourcePublishedAt])
+  @@index([lastSeenAt])
+}
+
+model HotspotEventKeyword {
+  id        Int          @id @default(autoincrement())
+  eventId   Int
+  keywordId Int
+  createdAt DateTime     @default(now())
+  event     HotspotEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  keyword   Keyword      @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, keywordId])
+  @@index([keywordId])
+}
+
+model HotspotSourceItem {
+  id                Int             @id @default(autoincrement())
+  eventId           Int
+  title             String
+  snippet           String?
+  bodyText          String?
+  bodyHash          String?
+  originalUrl       String
+  canonicalUrl      String
+  publisherDomain   String?
+  publisherName     String?
+  sourceType        String
+  sourceAuthor      String?
+  sourcePublishedAt DateTime?
+  engagementJson    String?
+  fetchStatus       String          @default("metadata_only")
+  fetchError        String?
+  isOfficial        Boolean         @default(false)
+  isSyndicated      Boolean         @default(false)
+  sourceGroup       String?
+  evidenceFlagsJson String?
+  discoveredAt      DateTime        @default(now())
+  lastSeenAt        DateTime        @updatedAt
+  event             HotspotEvent    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  claimEvidence     ClaimEvidence[]
+
+  @@unique([eventId, canonicalUrl])
+  @@index([canonicalUrl])
+  @@index([publisherDomain])
+  @@index([sourceType])
+  @@index([bodyHash])
+}
+
+model EventClaim {
+  id         Int             @id @default(autoincrement())
+  eventId    Int
+  claimKey   String
+  statement  String
+  status     String          @default("unverified")
+  confidence Int             @default(0)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  event      HotspotEvent    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  evidence   ClaimEvidence[]
+
+  @@unique([eventId, claimKey])
+  @@index([status])
+}
+
+model ClaimEvidence {
+  id           Int               @id @default(autoincrement())
+  claimId      Int
+  sourceItemId Int
+  stance       String
+  excerpt      String?
+  confidence   Int               @default(0)
+  createdAt    DateTime          @default(now())
+  claim        EventClaim        @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  sourceItem   HotspotSourceItem @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+
+  @@unique([claimId, sourceItemId])
+  @@index([stance])
+}
+
+model SourceHealth {
+  id             Int       @id @default(autoincrement())
+  sourceType     String    @unique
+  status         String    @default("unknown")
+  lastAttemptAt  DateTime?
+  lastSuccessAt  DateTime?
+  durationMs     Int?
+  httpStatus     Int?
+  candidateCount Int       @default(0)
+  filteredCount  Int       @default(0)
+  errorMessage   String?
+  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime  @default(now())
+}
+
+model VerificationFeedback {
+  id        Int          @id @default(autoincrement())
+  eventId   Int
+  type      String
+  note      String?
+  createdAt DateTime     @default(now())
+  event     HotspotEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, type])
+}
+
+model EventNotificationLog {
+  id           Int          @id @default(autoincrement())
+  eventId      Int
+  channel      String
+  status       String
+  recipient    String?
+  errorMessage String?
+  sentAt       DateTime     @default(now())
+  event        HotspotEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, channel, status])
+  @@index([sentAt])
+}
+
+model LatestScanInbox {
+  id          Int                   @id
+  scanJobId   String?
+  trigger     String?
+  scannedAt   DateTime?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  items       LatestScanInboxItem[]
+}
+
+model LatestScanInboxItem {
+  id         Int             @id @default(autoincrement())
+  inboxId    Int
+  eventId    Int
+  isRead     Boolean         @default(false)
+  capturedAt DateTime        @default(now())
+  inbox      LatestScanInbox @relation(fields: [inboxId], references: [id], onDelete: Cascade)
+  event      HotspotEvent    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([inboxId, eventId])
+  @@index([inboxId, isRead])
+  @@index([capturedAt])
 }

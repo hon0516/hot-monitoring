@@ -1,20 +1,31 @@
 import { prisma } from '../db/prisma.js';
-import { analyzeHotspot, sanitizeEvidenceText } from './aiService.js';
-import { dispatchNotifications } from './notificationService.js';
+import { analyzeHotspot, buildHotspotSummary, expandKeyword, preMatchKeyword, sanitizeEvidenceText } from './aiService.js';
+import {
+  buildEvidencePackage,
+  finalizeAudit,
+  needsSecondReview,
+  shouldStoreAuditedCandidate,
+  shouldUseAiReview
+} from './auditService.js';
+import { dispatchEventNotifications, dispatchNotifications } from './notificationService.js';
 import { ensureSettings } from './settingsService.js';
 import { searchBing } from '../sources/bingSource.js';
 import { searchGoogleNews } from '../sources/googleNewsSource.js';
 import { searchHackerNews } from '../sources/hackerNewsSource.js';
 import { searchTwitter } from '../sources/twitterSource.js';
 import { searchBilibili } from '../sources/bilibiliSource.js';
-import { searchWeibo } from '../sources/weiboSource.js';
 import { searchSogou } from '../sources/sogouSource.js';
 import { buildDedupeFields, meetsNotificationThreshold } from '../utils/normalize.js';
+import { calculateHeatScore, getHeatLabel } from '../utils/heat.js';
 import { randomDelay, sleep } from '../utils/delay.js';
 import { socketHub } from '../ws/socketHub.js';
 import { env } from '../config/env.js';
+import { processCandidateAsEvent, projectEvent } from './deepVerificationService.js';
+import { recordSourceHealth } from './sourceHealthService.js';
+import { replaceLatestScanInbox } from './latestScanInboxService.js';
 
 const HOTSPOT_MAX_AGE_DAYS = 30;
+const HIDDEN_SOURCE_TYPES = new Set(['weibo', 'weibo-hot']);
 
 function getHotspotFreshnessWhere() {
   const cutoff = new Date(Date.now() - HOTSPOT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
@@ -91,19 +102,96 @@ async function hydrateHotspot(id) {
   return sanitizeHotspot(hotspot);
 }
 
-const hotspotOrderBy = [{ discoveredAt: 'desc' }, { aiRelevance: 'desc' }];
+const hotspotOrderBy = [
+  { trustScore: 'desc' },
+  { aiRelevance: 'desc' },
+  { sourceQualityScore: 'desc' },
+  { sourcePublishedAt: 'desc' },
+  { discoveredAt: 'desc' }
+];
 
 export async function listHotspots(filters) {
   const page = Math.max(1, Number.parseInt(filters.page || '1', 10) || 1);
   const pageSize = Math.min(50, Math.max(1, Number.parseInt(filters.pageSize || '12', 10) || 12));
+  const where = buildHotspotWhere(filters);
+  const sourceCountsWhere = buildHotspotWhere({ ...filters, sourceType: '' });
 
-  const where = {
+  const [items, total, sourceGroups] = await Promise.all([
+    prisma.hotspot.findMany({
+      where,
+      include: {
+        keywords: {
+          include: {
+            keyword: true
+          }
+        },
+        notifications: {
+          orderBy: {
+            sentAt: 'desc'
+          }
+        }
+      },
+      orderBy: hotspotOrderBy,
+      skip: (page - 1) * pageSize,
+      take: pageSize
+    }),
+    prisma.hotspot.count({ where }),
+    prisma.hotspot.groupBy({
+      by: ['sourceType'],
+      where: sourceCountsWhere,
+      _count: {
+        _all: true
+      }
+    })
+  ]);
+
+  return {
+    items: items.map(sanitizeHotspot),
+    pagination: {
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize))
+    },
+    meta: {
+      sourceCounts: buildSourceCounts(sourceGroups)
+    }
+  };
+}
+
+function buildHotspotWhere(filters) {
+  return {
     AND: [
       getHotspotFreshnessWhere(),
       {
+        sourceType: {
+          notIn: [...HIDDEN_SOURCE_TYPES]
+        }
+      },
+      {
         sourceType: filters.sourceType || undefined,
         aiImportance: filters.importance || undefined,
-        aiIsReal: filters.onlyReal === 'true' ? true : undefined,
+        OR:
+          filters.onlyReal === 'true'
+            ? [
+                {
+                  auditStatus: 'trusted',
+                  trustScore: {
+                    gte: 75
+                  },
+                  aiRelevance: {
+                    gte: 70
+                  }
+                },
+                {
+                  auditStatus: null,
+                  aiIsReal: true,
+                  aiRelevance: {
+                    gte: 70
+                  }
+                }
+              ]
+            : undefined,
         keywords: filters.keyword
           ? {
               some: {
@@ -126,37 +214,20 @@ export async function listHotspots(filters) {
       }
     ]
   };
+}
 
-  const [items, total] = await Promise.all([
-    prisma.hotspot.findMany({
-      where,
-      include: {
-        keywords: {
-          include: {
-            keyword: true
-          }
-        },
-        notifications: {
-          orderBy: {
-            sentAt: 'desc'
-          }
-        }
-      },
-      orderBy: hotspotOrderBy,
-      skip: (page - 1) * pageSize,
-      take: pageSize
-    }),
-    prisma.hotspot.count({ where })
-  ]);
+function buildSourceCounts(groups) {
+  const counts = buildSourceStats();
+  for (const group of groups) {
+    if (HIDDEN_SOURCE_TYPES.has(group.sourceType)) {
+      continue;
+    }
+    counts[group.sourceType] = group._count?._all || 0;
+  }
 
   return {
-    items: items.map(sanitizeHotspot),
-    pagination: {
-      page,
-      pageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pageSize))
-    }
+    all: Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0),
+    ...counts
   };
 }
 
@@ -165,8 +236,21 @@ function sanitizeHotspot(hotspot) {
     return hotspot;
   }
 
+  const keyword = hotspot.keywords?.[0]?.keyword?.term || null;
+  const heatScore = calculateHeatScore(hotspot);
+
   return {
     ...hotspot,
+    heatScore,
+    heatLabel: getHeatLabel(heatScore),
+    aiSummary: hotspot.aiSummary || buildHotspotSummary({
+      value: hotspot.aiSummary,
+      item: {
+        title: hotspot.title,
+        snippet: hotspot.snippet
+      },
+      keyword
+    }),
     aiEvidence: sanitizeEvidenceText(hotspot.aiEvidence, { publishedAt: hotspot.sourcePublishedAt })
   };
 }
@@ -175,27 +259,41 @@ export async function getHotspotById(id) {
   return hydrateHotspot(id);
 }
 
-async function createHotspotRecord({ item, keyword, analysis }) {
+async function createHotspotRecord({ item, keyword, analysis, audit }) {
   const { canonicalUrl, titleNormalized, dedupeKey } = buildDedupeFields(item);
+  const fallbackSummary = buildHotspotSummary({
+    value: analysis?.summary,
+    item,
+    keyword: keyword?.term || null
+  });
   const existing = await findDuplicate({ canonicalUrl, titleNormalized });
 
   if (existing) {
     await ensureHotspotKeyword(existing.id, keyword?.id);
     if (
-      analysis &&
+      (analysis || audit) &&
       (existing.aiImportance === null ||
         existing.aiRelevance === null ||
         existing.aiSummary === null ||
-        existing.aiEvidence === null)
+        existing.aiEvidence === null ||
+        existing.auditStatus === null ||
+        existing.trustScore === null)
     ) {
       await prisma.hotspot.update({
         where: { id: existing.id },
         data: {
-          aiIsReal: analysis.isReal,
-          aiRelevance: analysis.relevance,
-          aiImportance: analysis.importance,
-          aiSummary: analysis.summary,
-          aiEvidence: analysis.evidence
+          aiIsReal: analysis?.isReal ?? existing.aiIsReal,
+          aiRelevance: analysis?.relevance ?? existing.aiRelevance,
+          aiImportance: analysis?.importance ?? existing.aiImportance,
+          aiSummary: fallbackSummary || existing.aiSummary,
+          aiEvidence: analysis?.evidence ?? existing.aiEvidence,
+          auditStatus: audit?.auditStatus ?? null,
+          aiConfidence: audit?.aiConfidence ?? null,
+          trustScore: audit?.trustScore ?? null,
+          sourceQualityScore: audit?.sourceQualityScore ?? null,
+          auditFlagsJson: audit?.auditFlags ? JSON.stringify(audit.auditFlags) : null,
+          auditVersion: audit?.auditVersion ?? null,
+          corroborationCount: audit?.corroborationCount ?? 0
         }
       });
     }
@@ -218,8 +316,15 @@ async function createHotspotRecord({ item, keyword, analysis }) {
       aiIsReal: analysis?.isReal ?? null,
       aiRelevance: analysis?.relevance ?? null,
       aiImportance: analysis?.importance ?? null,
-      aiSummary: analysis?.summary ?? null,
+      aiSummary: fallbackSummary,
       aiEvidence: analysis?.evidence ?? null,
+      auditStatus: audit?.auditStatus ?? null,
+      aiConfidence: audit?.aiConfidence ?? null,
+      trustScore: audit?.trustScore ?? null,
+      sourceQualityScore: audit?.sourceQualityScore ?? null,
+      auditFlagsJson: audit?.auditFlags ? JSON.stringify(audit.auditFlags) : null,
+      auditVersion: audit?.auditVersion ?? null,
+      corroborationCount: audit?.corroborationCount ?? 0,
       keywords: keyword?.id
         ? {
             create: {
@@ -243,7 +348,6 @@ const KEYWORD_SOURCE_CONFIGS = [
   { name: 'hacker-news', runner: searchHackerNews, applyDelay: false, enabledKey: 'hackerNewsSourceEnabled' },
   { name: 'twitter', runner: searchTwitter, applyDelay: false, enabledKey: 'twitterSourceEnabled' },
   { name: 'bilibili', runner: searchBilibili, applyDelay: false, enabledKey: 'bilibiliSourceEnabled' },
-  { name: 'weibo', runner: searchWeibo, applyDelay: false, enabledKey: 'weiboSourceEnabled' },
   { name: 'sogou', runner: searchSogou, applyDelay: false, enabledKey: 'sogouSourceEnabled' }
 ];
 
@@ -309,6 +413,13 @@ export function triggerCollection({ trigger = 'manual' } = {}) {
     try {
       const result = await runCollection({ trigger });
       const finishedAt = new Date().toISOString();
+      const latestScanInbox = await replaceLatestScanInbox({
+        scanJobId: jobId,
+        trigger,
+        scannedAt: new Date(finishedAt),
+        items: result.items
+      });
+      socketHub.publishLatestScan(latestScanInbox);
       const warning = String(result.warning || '').trim();
       const message = String(result.message || '').trim() || `扫描完成，新增 ${result.createdCount} 条热点`;
 
@@ -329,6 +440,17 @@ export function triggerCollection({ trigger = 'manual' } = {}) {
           pendingAnalysisCount: result.pendingAnalysisCount,
           hitAnalysisLimit: result.hitAnalysisLimit,
           skipAiForCurrentRun: result.skipAiForCurrentRun,
+          ruleOnlyCount: result.ruleOnlyCount,
+          aiReviewedCount: result.aiReviewedCount,
+          ruleFilteredCount: result.ruleFilteredCount,
+          lowRelevanceFilteredCount: result.lowRelevanceFilteredCount,
+          fullTextFetchedCount: result.fullTextFetchedCount,
+          corroboratedCount: result.corroboratedCount,
+          verificationFailedCount: result.verificationFailedCount,
+          trustedCount: result.trustedCount,
+          createdEventCount: result.createdEventCount,
+          updatedEventCount: result.updatedEventCount,
+          latestScanCount: latestScanInbox.total,
           sourceStats: result.sourceStats
         }
       });
@@ -423,6 +545,7 @@ async function processSourceItems({
   sourceStats
 }) {
   let sourceItems = [];
+  const sourceStartedAt = new Date();
 
   try {
     sourceItems = await source.runner({
@@ -431,83 +554,152 @@ async function processSourceItems({
     });
   } catch (error) {
     console.error(`[collection:${source.name}]`, error.message);
+    await recordSourceHealth({
+      sourceType: source.name,
+      startedAt: sourceStartedAt,
+      error
+    });
     if (source.applyDelay) {
       await sleep(randomDelay());
     }
     return;
   }
 
-  sourceStats[source.name] = (sourceStats[source.name] || 0) + sourceItems.length;
-
   for (const item of sourceItems) {
+    sourceStats[item.sourceType || source.name] = (sourceStats[item.sourceType || source.name] || 0) + 1;
+
     if (counters.processedCount >= env.aiAnalysisMaxItemsPerRun) {
       counters.hitAnalysisLimit = true;
       break;
     }
 
     counters.processedCount += 1;
-    let analysis = null;
-
-    if (!counters.skipAiForCurrentRun) {
-      try {
-        analysis = await analyzeHotspot({
-          settings,
-          scope: settings.scope,
-          keyword: keyword?.term || null,
-          item
-        });
-        counters.analysisConsecutiveFailures = 0;
-      } catch (error) {
-        counters.analysisErrorCount += 1;
-        counters.analysisConsecutiveFailures += 1;
-        counters.analysisErrorMessage ||= error.message;
-        console.error('[analysis] 热点分析失败', error.message);
-
-        const isRateLimitOrTimeout =
-          /429|超时|timeout|rate limit|too many requests/iu.test(String(error?.message || ''));
-        if (isRateLimitOrTimeout && counters.analysisConsecutiveFailures >= 3) {
-          counters.skipAiForCurrentRun = true;
-          console.error('[analysis] 本轮已触发 AI 熔断，后续候选将跳过 AI 分析并以待复核入库');
-        }
-      }
-    }
-
-    const { hotspot, created, pendingAnalysis } = await createHotspotRecord({
-      item,
-      keyword,
-      analysis
-    });
-
-    if (!hotspot) {
+    if (!keyword?.id || !item?.title || !item?.url) {
       counters.skippedCount += 1;
+      counters.ruleFilteredCount += 1;
       continue;
     }
 
-    if (!created) {
-      counters.duplicateCount += 1;
-      continue;
-    }
-
-    createdItems.push(hotspot);
-    if (pendingAnalysis) {
-      counters.pendingAnalysisCount += 1;
-      continue;
-    }
-
-    if (meetsNotificationThreshold(hotspot, settings)) {
-      await dispatchNotifications({
-        hotspot,
-        settings,
-        trigger
+    try {
+      const result = await processCandidateAsEvent({
+        item,
+        keyword,
+        settings
       });
-    } else if (settings.websocketEnabled && trigger !== 'manual') {
-      socketHub.broadcast('hotspot:new', hotspot);
+      const projected = projectEvent(result.event);
+      counters.aiReviewedCount += result.aiCallCount || 3;
+      if (result.fullTextFetched) counters.fullTextFetchedCount += 1;
+      if (result.corroborated) counters.corroboratedCount += 1;
+      if (result.verificationFailed) counters.verificationFailedCount += 1;
+      if (result.event.verificationStatus === 'trusted') counters.trustedCount += 1;
+      if (result.created) counters.createdEventCount += 1;
+      else counters.updatedEventCount += 1;
+
+      const existingIndex = createdItems.findIndex((entry) => entry.id === projected.id);
+      if (existingIndex >= 0) createdItems[existingIndex] = projected;
+      else createdItems.push(projected);
+
+      if (result.event.verificationStatus === 'trusted') {
+        await dispatchEventNotifications({
+          event: result.event,
+          hotspot: projected,
+          settings,
+          trigger
+        });
+      }
+    } catch (error) {
+      counters.analysisErrorCount += 1;
+      counters.analysisErrorMessage ||= error.message;
+      counters.verificationFailedCount += 1;
+      counters.skippedCount += 1;
+      console.error('[deep-verification] 热点深度核验失败', error.message);
     }
   }
+
+  await recordSourceHealth({
+    sourceType: source.name,
+    startedAt: sourceStartedAt,
+    candidateCount: sourceItems.length,
+    filteredCount: counters.skippedCount
+  });
 
   if (source.applyDelay) {
     await sleep(randomDelay());
   }
+}
+
+function buildRuleOnlyAnalysis({ audit, preMatch, item, keyword }) {
+  const relationSummary = buildRuleRelationSummary({ audit, preMatch, item, keyword });
+
+  return {
+    isReal: audit.auditStatus === 'trusted' || audit.auditStatus === 'needs_review',
+    relevance: audit.relevanceScore,
+    importance: audit.importance || 'low',
+    keywordMentioned: Boolean(preMatch?.matched),
+    summary: relationSummary,
+    evidence: audit.evidence.join('\n')
+  };
+}
+
+function buildRuleRelationSummary({ audit, preMatch, item, keyword }) {
+  if (!keyword) {
+    return null;
+  }
+
+  const title = String(item?.title || '').trim();
+  const contentType = audit.contentType || 'discussion';
+  const matchedTerms = Array.isArray(preMatch?.matchedTerms) ? preMatch.matchedTerms.filter(Boolean).slice(0, 2) : [];
+  const matchText = matchedTerms.length ? `命中「${matchedTerms.join('、')}」` : '命中关键词线索';
+
+  if (preMatch?.matched) {
+    if (contentType === 'event') {
+      return `此内容与【${keyword}】的关联：${matchText}，并呈现为近期事件或产品动态。`;
+    }
+
+    if (contentType === 'tutorial') {
+      return `此内容与【${keyword}】的关联：${matchText}，但更像教程或经验内容，需降低热点权重。`;
+    }
+
+    if (contentType === 'collection') {
+      return `此内容与【${keyword}】的关联：${matchText}，但更像合集或系列内容，需谨慎展示。`;
+    }
+
+    return `此内容与【${keyword}】的关联：${matchText}，主题与监控关键词直接相关。`;
+  }
+
+  if (title) {
+    return `此内容与【${keyword}】的关联：标题《${title}》来自关键词检索结果，但未直接命中关键词，相关性保守评估。`;
+  }
+
+  return `此内容与【${keyword}】的关联：来自关键词检索结果，但证据较少，相关性保守评估。`;
+}
+
+function mergeAnalysisResults(first, second, firstAudit, secondAudit) {
+  if (!second) {
+    return first;
+  }
+
+  const firstTrust = Number(firstAudit?.trustScore ?? first?.trustScore ?? 0);
+  const secondTrust = Number(secondAudit?.trustScore ?? second?.trustScore ?? 0);
+  const conservative = secondTrust < firstTrust ? second : first;
+
+  return {
+    ...conservative,
+    isReal: Boolean(first?.isReal && second?.isReal),
+    relevance: Math.round((Number(first?.relevance || 0) + Number(second?.relevance || 0)) / 2),
+    trustScore: Math.min(Number(first?.trustScore || 0), Number(second?.trustScore || 0)),
+    confidence: Math.round((Number(first?.confidence || 0) + Number(second?.confidence || 0)) / 2),
+    evidence: [first?.evidence, second?.evidence].filter(Boolean).join('\n')
+  };
+}
+
+function alignAnalysisWithAudit(analysis, audit) {
+  return {
+    ...analysis,
+    isReal: audit.auditStatus === 'trusted' || (analysis.isReal === true && audit.auditStatus === 'needs_review'),
+    relevance: audit.relevanceScore,
+    evidence: audit.evidence.join('\n')
+  };
 }
 
 function buildCollectionWarning({ createdCount, counters }) {
@@ -557,7 +749,17 @@ export async function runCollection({ trigger = 'manual' } = {}) {
     analysisErrorMessage: null,
     pendingAnalysisCount: 0,
     hitAnalysisLimit: false,
-    skipAiForCurrentRun: false
+    skipAiForCurrentRun: false,
+    ruleOnlyCount: 0,
+    aiReviewedCount: 0,
+    ruleFilteredCount: 0,
+    lowRelevanceFilteredCount: 0,
+    fullTextFetchedCount: 0,
+    corroboratedCount: 0,
+    verificationFailedCount: 0,
+    trustedCount: 0,
+    createdEventCount: 0,
+    updatedEventCount: 0
   };
   const sourceStats = buildSourceStats();
 
@@ -605,6 +807,16 @@ export async function runCollection({ trigger = 'manual' } = {}) {
       pendingAnalysisCount: 0,
       hitAnalysisLimit: false,
       skipAiForCurrentRun: false,
+      ruleOnlyCount: 0,
+      aiReviewedCount: 0,
+      ruleFilteredCount: 0,
+      lowRelevanceFilteredCount: 0,
+      fullTextFetchedCount: 0,
+      corroboratedCount: 0,
+      verificationFailedCount: 0,
+      trustedCount: 0,
+      createdEventCount: 0,
+      updatedEventCount: 0,
       sourceStats,
       items: []
     }
@@ -628,6 +840,16 @@ export async function runCollection({ trigger = 'manual' } = {}) {
     pendingAnalysisCount: counters.pendingAnalysisCount,
     hitAnalysisLimit: counters.hitAnalysisLimit,
     skipAiForCurrentRun: counters.skipAiForCurrentRun,
+    ruleOnlyCount: counters.ruleOnlyCount,
+    aiReviewedCount: counters.aiReviewedCount,
+    ruleFilteredCount: counters.ruleFilteredCount,
+    lowRelevanceFilteredCount: counters.lowRelevanceFilteredCount,
+    fullTextFetchedCount: counters.fullTextFetchedCount,
+    corroboratedCount: counters.corroboratedCount,
+    verificationFailedCount: counters.verificationFailedCount,
+    trustedCount: counters.trustedCount,
+    createdEventCount: counters.createdEventCount,
+    updatedEventCount: counters.updatedEventCount,
     sourceStats,
     items: createdItems
   };

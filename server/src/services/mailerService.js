@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { configState, env } from '../config/env.js';
+import { calculateHeatScore, getHeatLabel } from '../utils/heat.js';
 
 let transporter = null;
 
@@ -29,6 +30,9 @@ export async function sendHotspotEmail({ recipient, hotspot, keywords }) {
     throw new Error('SMTP 未配置');
   }
 
+  const heatScore = calculateHeatScore(hotspot);
+  const heatText = `${getHeatLabel(heatScore)} ${heatScore}`;
+
   return client.sendMail({
     from: env.smtpFrom,
     to: recipient,
@@ -39,7 +43,7 @@ export async function sendHotspotEmail({ recipient, hotspot, keywords }) {
 标题：${hotspot.title}
 来源：${hotspot.sourceType}
 关键词：${keywords.join(', ')}
-重要度：${hotspot.aiImportance || 'unknown'}
+热度：${heatText}
 相关性：${hotspot.aiRelevance ?? 'unknown'}
 摘要：${hotspot.aiSummary || hotspot.snippet || '暂无'}
 判断依据：${hotspot.aiEvidence || '暂无'}
@@ -50,7 +54,7 @@ export async function sendHotspotEmail({ recipient, hotspot, keywords }) {
       <p><strong>标题：</strong>${hotspot.title}</p>
       <p><strong>来源：</strong>${hotspot.sourceType}</p>
       <p><strong>关键词：</strong>${keywords.join(', ')}</p>
-      <p><strong>重要度：</strong>${hotspot.aiImportance || 'unknown'}</p>
+      <p><strong>热度：</strong>${heatText}</p>
       <p><strong>相关性：</strong>${hotspot.aiRelevance ?? 'unknown'}</p>
       <p><strong>摘要：</strong>${hotspot.aiSummary || hotspot.snippet || '暂无'}</p>
       <p><strong>判断依据：</strong>${hotspot.aiEvidence || '暂无'}</p>

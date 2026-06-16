@@ -1,29 +1,19 @@
 import { prisma } from '../db/prisma.js';
 
-export async function getDashboardSummary() {
-  const analyzedWhere = {
-    aiImportance: {
-      not: null
-    },
-    aiRelevance: {
-      not: null
-    }
-  };
+const VISIBLE_SOURCE_WHERE = {
+  sourceType: {
+    notIn: ['weibo', 'weibo-hot']
+  }
+};
 
+export async function getDashboardSummary() {
   const [totalHotspots, verifiedHotspots, urgentHotspots, activeKeywords, latestHotspot] = await Promise.all([
-    prisma.hotspot.count(),
-    prisma.hotspot.count({
+    prisma.hotspotEvent.count(),
+    prisma.hotspotEvent.count({ where: { verificationStatus: 'trusted' } }),
+    prisma.hotspotEvent.count({
       where: {
-        ...analyzedWhere,
-        aiIsReal: true
-      }
-    }),
-    prisma.hotspot.count({
-      where: {
-        ...analyzedWhere,
-        aiImportance: {
-          in: ['high', 'urgent']
-        }
+        verificationStatus: 'trusted',
+        importance: { in: ['high', 'urgent'] }
       }
     }),
     prisma.keyword.count({
@@ -31,9 +21,9 @@ export async function getDashboardSummary() {
         enabled: true
       }
     }),
-    prisma.hotspot.findFirst({
+    prisma.hotspotEvent.findFirst({
       orderBy: {
-        discoveredAt: 'desc'
+        lastSeenAt: 'desc'
       }
     })
   ]);
@@ -43,6 +33,6 @@ export async function getDashboardSummary() {
     verifiedHotspots,
     urgentHotspots,
     activeKeywords,
-    latestDiscoveredAt: latestHotspot?.discoveredAt || null
+    latestDiscoveredAt: latestHotspot?.lastSeenAt || null
   };
 }

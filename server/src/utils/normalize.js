@@ -70,10 +70,18 @@ export function parseImportanceRank(value) {
 }
 
 export function meetsNotificationThreshold(hotspot, settings) {
+  if (hotspot.auditStatus) {
+    return Boolean(
+      hotspot.auditStatus === 'trusted' &&
+        Number(hotspot.trustScore || 0) >= 75 &&
+        Number(hotspot.aiRelevance || 0) >= settings.relevanceThreshold &&
+        parseImportanceRank(hotspot.aiImportance) >= parseImportanceRank(settings.importanceThreshold)
+    );
+  }
+
   return Boolean(
     hotspot.aiIsReal &&
       Number(hotspot.aiRelevance || 0) >= settings.relevanceThreshold &&
       parseImportanceRank(hotspot.aiImportance) >= parseImportanceRank(settings.importanceThreshold)
   );
 }
-

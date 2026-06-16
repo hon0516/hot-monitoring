@@ -33,6 +33,9 @@ export const env = {
   tencentTokenHubModel: process.env.TENCENT_TOKENHUB_MODEL || 'deepseek-v4-pro-202606',
   openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
   openRouterModel: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+  aiReviewMode: ['cost_saver', 'balanced'].includes(String(process.env.AI_REVIEW_MODE || '').trim())
+    ? String(process.env.AI_REVIEW_MODE || '').trim()
+    : 'cost_saver',
   aiAnalysisTimeoutMs: Math.min(120000, Math.max(5000, toInt(process.env.AI_ANALYSIS_TIMEOUT_MS, 30000))),
   aiAnalysisMaxItemsPerRun: Math.min(500, Math.max(10, toInt(process.env.AI_ANALYSIS_MAX_ITEMS_PER_RUN, 80))),
   twitterApiKey: process.env.TWITTERAPI_IO_KEY || '',

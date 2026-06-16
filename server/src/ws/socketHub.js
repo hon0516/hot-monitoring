@@ -1,9 +1,17 @@
-const importanceLabels = {
-  low: '低',
-  medium: '中',
-  high: '高',
-  urgent: '紧急'
-};
+import { buildHotspotSummary } from '../services/aiService.js';
+import { calculateHeatScore, getHeatLabel } from '../utils/heat.js';
+
+function buildRealtimeSummary(hotspot) {
+  const keyword = hotspot.keywords?.[0]?.keyword?.term || hotspot.keywords?.[0]?.term || null;
+  return buildHotspotSummary({
+    value: hotspot.aiSummary,
+    item: {
+      title: hotspot.title,
+      snippet: hotspot.snippet
+    },
+    keyword
+  });
+}
 
 class SocketHub {
   constructor() {
@@ -41,6 +49,8 @@ class SocketHub {
   }
 
   serializeHotspot(hotspot) {
+    const heatScore = calculateHeatScore(hotspot);
+
     return {
       hotspotId: hotspot.id,
       title: hotspot.title,
@@ -50,9 +60,23 @@ class SocketHub {
       engagementJson: hotspot.engagementJson || null,
       isReal: hotspot.aiIsReal ?? null,
       importance: hotspot.aiImportance || null,
-      importanceLabel: importanceLabels[hotspot.aiImportance] || '',
+      heatScore,
+      heatLabel: getHeatLabel(heatScore),
       relevance: hotspot.aiRelevance ?? null,
-      summary: hotspot.aiSummary || hotspot.snippet || '',
+      auditStatus: hotspot.auditStatus || null,
+      aiConfidence: hotspot.aiConfidence ?? null,
+      trustScore: hotspot.trustScore ?? null,
+      sourceQualityScore: hotspot.sourceQualityScore ?? null,
+      evidenceScore: hotspot.evidenceScore ?? null,
+      corroborationScore: hotspot.corroborationScore ?? null,
+      contradictionScore: hotspot.contradictionScore ?? null,
+      independentSourceCount: hotspot.independentSourceCount ?? hotspot.corroborationCount ?? 0,
+      hasOfficialSource: Boolean(hotspot.hasOfficialSource),
+      verificationStatus: hotspot.verificationStatus || null,
+      auditFlagsJson: hotspot.auditFlagsJson || null,
+      auditVersion: hotspot.auditVersion || null,
+      corroborationCount: hotspot.corroborationCount ?? 0,
+      summary: buildRealtimeSummary(hotspot),
       evidence: hotspot.aiEvidence || '',
       url: hotspot.url,
       discoveredAt: hotspot.discoveredAt,
@@ -92,6 +116,25 @@ class SocketHub {
       payload: {
         ...payload,
         message
+      }
+    });
+
+    this.clients.forEach((socket) => {
+      if (socket.readyState === 1) {
+        socket.send(packet);
+      }
+    });
+  }
+
+  publishLatestScan(inbox) {
+    const packet = JSON.stringify({
+      event: 'scan:latest',
+      payload: {
+        scanJobId: inbox.scanJobId,
+        trigger: inbox.trigger,
+        scannedAt: inbox.scannedAt,
+        unreadCount: inbox.unreadCount,
+        total: inbox.total
       }
     });
 

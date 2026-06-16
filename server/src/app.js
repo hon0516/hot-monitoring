@@ -5,6 +5,7 @@ import { hotspotRouter } from './routes/hotspots.js';
 import { keywordRouter } from './routes/keywords.js';
 import { notificationRouter } from './routes/notifications.js';
 import { settingsRouter } from './routes/settings.js';
+import { sourceRouter } from './routes/sources.js';
 
 export function createApp() {
   const app = express();
@@ -27,6 +28,7 @@ export function createApp() {
   app.use('/api/hotspots', hotspotRouter);
   app.use('/api/settings', settingsRouter);
   app.use('/api/notifications', notificationRouter);
+  app.use('/api/sources', sourceRouter);
 
   app.use((error, _req, res, _next) => {
     const status = error.code === 'P2002' ? 409 : 400;
@@ -37,4 +39,3 @@ export function createApp() {
 
   return app;
 }
-

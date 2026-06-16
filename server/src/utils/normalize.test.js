@@ -22,5 +22,32 @@ describe('normalize utils', () => {
       )
     ).toBe(true);
   });
-});
 
+  it('requires trusted audit status and trust score for audited notifications', () => {
+    expect(
+      meetsNotificationThreshold(
+        {
+          auditStatus: 'needs_review',
+          trustScore: 88,
+          aiIsReal: true,
+          aiRelevance: 90,
+          aiImportance: 'urgent'
+        },
+        { relevanceThreshold: 70, importanceThreshold: 'high' }
+      )
+    ).toBe(false);
+
+    expect(
+      meetsNotificationThreshold(
+        {
+          auditStatus: 'trusted',
+          trustScore: 82,
+          aiIsReal: true,
+          aiRelevance: 90,
+          aiImportance: 'urgent'
+        },
+        { relevanceThreshold: 70, importanceThreshold: 'high' }
+      )
+    ).toBe(true);
+  });
+});
