@@ -147,7 +147,31 @@ npm --prefix server install
 npm --prefix web install
 ```
 
-## 7. 重新生成 Prisma 并初始化数据库
+## 7. 重新构建项目
+
+这一步非常关键。
+
+前端线上实际发布的是 `web/dist` 里的静态文件；如果你只上传源码、安装依赖，但没有重新执行构建，那么后面复制到 nginx 目录的仍然可能是旧版本的 `dist`，页面刷新后看起来就像“没有更新成功”。
+
+执行：
+
+```bash
+npm run build
+```
+
+如果你只想单独构建前端，也可以执行：
+
+```bash
+npm run build:web
+```
+
+建议构建后确认一下 `web/dist` 的更新时间已经变成刚刚：
+
+```bash
+ls -lah /home/admin/hot-monitoring/web/dist
+```
+
+## 8. 重新生成 Prisma 并初始化数据库
 
 ```bash
 npm run db:generate
@@ -156,7 +180,7 @@ npm run db:init
 
 如果这里报 `DATABASE_URL not found`，说明 `.env` 不在 `/home/admin/hot-monitoring/.env`。
 
-## 8. 重启后端服务
+## 9. 重启后端服务
 
 如果服务已经存在：
 
@@ -177,7 +201,7 @@ pm2 start "npm --prefix /home/admin/hot-monitoring/server run start" --name hot-
 pm2 save
 ```
 
-## 9. 检查后端是否正常
+## 10. 检查后端是否正常
 
 ```bash
 curl http://127.0.0.1:3000/api/health
@@ -192,7 +216,7 @@ pm2 status
 pm2 logs hot-monitoring-api --lines 50
 ```
 
-## 10. 同步前端静态文件到 nginx 目录
+## 11. 同步前端静态文件到 nginx 目录
 
 `nginx` 不直接读取 `/home/admin/hot-monitoring/web/dist`，因为那里容易遇到权限问题。
 
@@ -208,7 +232,7 @@ sudo rm -rf /usr/share/nginx/html/hot-monitoring/*
 sudo cp -R /home/admin/hot-monitoring/web/dist/* /usr/share/nginx/html/hot-monitoring/
 ```
 
-## 11. 检查 nginx 配置
+## 12. 检查 nginx 配置
 
 配置文件建议是：
 
@@ -252,7 +276,7 @@ sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-## 12. 验证线上访问
+## 13. 验证线上访问
 
 浏览器打开：
 
@@ -264,7 +288,7 @@ sudo systemctl restart nginx
 pm2 logs hot-monitoring-api --lines 50
 ```
 
-## 13. 常见问题
+## 14. 常见问题
 
 ### 1. 页面显示 `500 Internal Server Error`
 
@@ -346,7 +370,7 @@ COPYFILE_DISABLE=1 tar \
 BILIBILI_COOKIE="你的_bilibili_cookie"
 ```
 
-## 14. 最短更新流程
+## 15. 最短更新流程
 
 如果你下次只想快速更新，按这个顺序做：
 
@@ -375,6 +399,7 @@ cd /home/admin/hot-monitoring
 npm install
 npm --prefix server install
 npm --prefix web install
+npm run build
 npm run db:generate
 npm run db:init
 
