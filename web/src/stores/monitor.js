@@ -8,22 +8,31 @@ const sourceLabels = {
   'hacker-news': 'Hacker News',
   twitter: '推特',
   bilibili: '哔哩哔哩',
-  weibo: '微博',
   sogou: '搜狗'
 };
 
 function sortHotspotsByDiscoveredAt(collection) {
   collection.sort((left, right) => {
-    const rightTime = new Date(right?.discoveredAt || 0).getTime();
-    const leftTime = new Date(left?.discoveredAt || 0).getTime();
-    const discoveredDiff = rightTime - leftTime;
-    if (discoveredDiff !== 0) {
-      return discoveredDiff;
+    const trustDiff = Number(right?.trustScore ?? -1) - Number(left?.trustScore ?? -1);
+    if (trustDiff !== 0) {
+      return trustDiff;
     }
 
     const relevanceDiff = Number(right?.aiRelevance ?? -1) - Number(left?.aiRelevance ?? -1);
     if (relevanceDiff !== 0) {
       return relevanceDiff;
+    }
+
+    const sourceQualityDiff = Number(right?.sourceQualityScore ?? -1) - Number(left?.sourceQualityScore ?? -1);
+    if (sourceQualityDiff !== 0) {
+      return sourceQualityDiff;
+    }
+
+    const rightTime = new Date(right?.discoveredAt || 0).getTime();
+    const leftTime = new Date(left?.discoveredAt || 0).getTime();
+    const discoveredDiff = rightTime - leftTime;
+    if (discoveredDiff !== 0) {
+      return discoveredDiff;
     }
 
     return Number(right?.id || 0) - Number(left?.id || 0);
@@ -41,7 +50,22 @@ function mergeRealtimeHotspot(collection, payload) {
       engagementJson: payload.engagementJson,
       aiIsReal: payload.isReal,
       aiImportance: payload.importance,
+      heatScore: payload.heatScore,
+      heatLabel: payload.heatLabel,
       aiRelevance: payload.relevance,
+      auditStatus: payload.auditStatus,
+      aiConfidence: payload.aiConfidence,
+      trustScore: payload.trustScore,
+      sourceQualityScore: payload.sourceQualityScore,
+      evidenceScore: payload.evidenceScore,
+      corroborationScore: payload.corroborationScore,
+      contradictionScore: payload.contradictionScore,
+      independentSourceCount: payload.independentSourceCount,
+      hasOfficialSource: payload.hasOfficialSource,
+      verificationStatus: payload.verificationStatus,
+      auditFlagsJson: payload.auditFlagsJson,
+      auditVersion: payload.auditVersion,
+      corroborationCount: payload.corroborationCount,
       aiSummary: payload.summary,
       aiEvidence: payload.evidence,
       url: payload.url,
@@ -61,7 +85,22 @@ function mergeRealtimeHotspot(collection, payload) {
     engagementJson: payload.engagementJson,
     aiIsReal: payload.isReal,
     aiImportance: payload.importance,
+    heatScore: payload.heatScore,
+    heatLabel: payload.heatLabel,
     aiRelevance: payload.relevance,
+    auditStatus: payload.auditStatus,
+    aiConfidence: payload.aiConfidence,
+    trustScore: payload.trustScore,
+    sourceQualityScore: payload.sourceQualityScore,
+    evidenceScore: payload.evidenceScore,
+    corroborationScore: payload.corroborationScore,
+    contradictionScore: payload.contradictionScore,
+    independentSourceCount: payload.independentSourceCount,
+    hasOfficialSource: payload.hasOfficialSource,
+    verificationStatus: payload.verificationStatus,
+    auditFlagsJson: payload.auditFlagsJson,
+    auditVersion: payload.auditVersion,
+    corroborationCount: payload.corroborationCount,
     aiSummary: payload.summary,
     aiEvidence: payload.evidence,
     url: payload.url,
@@ -89,9 +128,27 @@ export const useMonitorStore = defineStore('monitor', {
       total: 0,
       totalPages: 1
     },
+    sourceCounts: {
+      all: 0,
+      bing: 0,
+      'google-news': 0,
+      'hacker-news': 0,
+      twitter: 0,
+      bilibili: 0,
+      sogou: 0
+    },
     settings: null,
     notifications: [],
+    latestScanInbox: {
+      scanJobId: null,
+      trigger: null,
+      scannedAt: null,
+      unreadCount: 0,
+      total: 0,
+      items: []
+    },
     systemHealth: null,
+    sourceHealth: [],
     socketState: 'connecting',
     liveMessage: '等待连接实时通道',
     loading: false,
@@ -126,7 +183,6 @@ export const useMonitorStore = defineStore('monitor', {
       'hacker-news': 0,
       twitter: 0,
       bilibili: 0,
-      weibo: 0,
       sogou: 0
     }
   }),
@@ -137,8 +193,10 @@ export const useMonitorStore = defineStore('monitor', {
         this.fetchHotspots(),
         this.fetchSettings(),
         this.fetchNotifications(),
+        this.fetchLatestScanInbox(),
         this.fetchSummary(),
         this.fetchHealth(),
+        this.fetchSourceHealth(),
         this.fetchScanStatus()
       ]);
 
@@ -155,6 +213,9 @@ export const useMonitorStore = defineStore('monitor', {
           },
           onNotification: (payload) => {
             this.liveMessage = payload.message;
+          },
+          onLatestScan: async () => {
+            await this.fetchLatestScanInbox();
           },
           onStateChange: (state) => {
             this.socketState = state;
@@ -189,11 +250,16 @@ export const useMonitorStore = defineStore('monitor', {
       const data = await api.getHotspots({
         page: this.pagination.page,
         pageSize: this.pagination.pageSize,
+        status: 'all',
         ...params
       });
       this.hotspots = data.items;
       sortHotspotsByDiscoveredAt(this.hotspots);
       this.pagination = data.pagination;
+      this.sourceCounts = {
+        ...this.sourceCounts,
+        ...(data.meta?.sourceCounts || {})
+      };
     },
     async fetchSummary() {
       this.summary = await api.getSummary();
@@ -207,8 +273,33 @@ export const useMonitorStore = defineStore('monitor', {
     async fetchNotifications() {
       this.notifications = await api.getNotifications();
     },
+    async fetchLatestScanInbox() {
+      this.latestScanInbox = await api.getLatestScanInbox();
+      return this.latestScanInbox;
+    },
+    async markLatestScanInboxItemRead(itemId) {
+      const item = this.latestScanInbox.items.find((entry) => entry.id === itemId);
+      if (!item || item.isRead) {
+        return this.latestScanInbox;
+      }
+
+      item.isRead = true;
+      this.latestScanInbox.unreadCount = Math.max(0, this.latestScanInbox.unreadCount - 1);
+
+      try {
+        this.latestScanInbox = await api.markLatestScanInboxItemRead(itemId);
+        return this.latestScanInbox;
+      } catch (error) {
+        item.isRead = false;
+        this.latestScanInbox.unreadCount += 1;
+        throw error;
+      }
+    },
     async fetchHealth() {
       this.systemHealth = await api.getHealth();
+    },
+    async fetchSourceHealth() {
+      this.sourceHealth = await api.getSourceHealth();
     },
     async searchAcrossSources(query) {
       const trimmedQuery = String(query || '').trim();
@@ -266,7 +357,6 @@ export const useMonitorStore = defineStore('monitor', {
             'hacker-news': Number(result.sourceStats?.['hacker-news'] || 0),
             twitter: Number(result.sourceStats?.twitter || 0),
             bilibili: Number(result.sourceStats?.bilibili || 0),
-            weibo: Number(result.sourceStats?.weibo || 0),
             sogou: Number(result.sourceStats?.sogou || 0)
           };
 
@@ -285,7 +375,13 @@ export const useMonitorStore = defineStore('monitor', {
             this.liveMessage = status.error || '后台扫描失败';
           }
 
-          await Promise.all([this.fetchHotspots(), this.fetchSummary(), this.fetchNotifications()]);
+          await Promise.all([
+            this.fetchHotspots(),
+            this.fetchSummary(),
+            this.fetchNotifications(),
+            this.fetchLatestScanInbox(),
+            this.fetchSourceHealth()
+          ]);
         }
       }, 3000);
     },

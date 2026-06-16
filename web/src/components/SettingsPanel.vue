@@ -71,6 +71,32 @@
 
       <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <div class="mb-4">
+          <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">渠道健康</p>
+          <p class="mt-2 text-sm text-slate-400">区分渠道无结果、限流、反爬阻断和真实采集故障。</p>
+        </div>
+        <div v-if="sourceHealth.length" class="grid gap-3 md:grid-cols-2">
+          <div
+            v-for="source in sourceHealth"
+            :key="source.sourceType"
+            class="rounded-[10px] border border-white/5 bg-slate-950/40 px-4 py-3"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <p class="text-sm text-white">{{ sourceHealthLabel(source.sourceType) }}</p>
+              <el-tag size="small" round :type="sourceHealthType(source.status)">
+                {{ sourceHealthStatus(source.status) }}
+              </el-tag>
+            </div>
+            <p class="mt-2 text-xs text-slate-500">
+              {{ source.candidateCount }} 条候选 · {{ source.durationMs || 0 }}ms
+            </p>
+            <p v-if="source.errorMessage" class="mt-1 text-xs text-ember">{{ source.errorMessage }}</p>
+          </div>
+        </div>
+        <p v-else class="text-sm text-slate-500">完成一次深度扫描后显示渠道状态。</p>
+      </section>
+
+      <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
+        <div class="mb-4">
           <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">扫描节奏</p>
           <p class="mt-2 text-sm text-slate-400">设置系统自动扫描热点的间隔。保存后后端会立即按新的频率重载定时任务。</p>
         </div>
@@ -111,12 +137,12 @@
           <el-form-item label="相关性阈值" class="mb-0">
             <el-input-number v-model.number="form.relevanceThreshold" min="0" max="100" controls-position="right" class="w-full" />
           </el-form-item>
-          <el-form-item label="重要度阈值" class="mb-0">
+          <el-form-item label="通知热度阈值" class="mb-0">
             <el-select v-model="form.importanceThreshold" class="w-full">
-              <el-option value="low" label="低" />
-              <el-option value="medium" label="中" />
-              <el-option value="high" label="高" />
-              <el-option value="urgent" label="紧急" />
+              <el-option value="low" label="冷" />
+              <el-option value="medium" label="温" />
+              <el-option value="high" label="热" />
+              <el-option value="urgent" label="爆" />
             </el-select>
           </el-form-item>
         </div>
@@ -223,8 +249,43 @@ const props = defineProps({
   settings: {
     type: Object,
     required: true
+  },
+  sourceHealth: {
+    type: Array,
+    default: () => []
   }
 });
+
+function sourceHealthLabel(value) {
+  const labels = {
+    bing: '必应资讯',
+    'google-news': '谷歌资讯',
+    'hacker-news': 'Hacker News',
+    twitter: '推特 / X',
+    bilibili: '哔哩哔哩',
+    sogou: '搜狗搜索'
+  };
+  return labels[value] || value;
+}
+
+function sourceHealthStatus(value) {
+  const labels = {
+    healthy: '正常',
+    empty: '无结果',
+    rate_limited: '被限流',
+    blocked: '访问受限',
+    error: '故障',
+    unknown: '未检测'
+  };
+  return labels[value] || '未检测';
+}
+
+function sourceHealthType(value) {
+  if (value === 'healthy') return 'success';
+  if (value === 'empty' || value === 'unknown') return 'info';
+  if (value === 'rate_limited' || value === 'blocked') return 'warning';
+  return 'danger';
+}
 
 const emit = defineEmits(['save']);
 
@@ -378,13 +439,6 @@ const searchSourceCards = computed(() => [
     description: '适合追踪中文视频社区里的 AI、产品和教程热度。',
     disabled: false,
     hint: '优先走公开接口，补充视频向内容。'
-  },
-  {
-    key: 'weiboSourceEnabled',
-    title: '微博搜索',
-    description: '适合补充中文舆论场和热词匹配结果。',
-    disabled: false,
-    hint: '优先抓实时搜索页，提供微博 Cookie 时稳定性更好。'
   },
   {
     key: 'sogouSourceEnabled',

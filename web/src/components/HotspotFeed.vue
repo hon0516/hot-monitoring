@@ -27,19 +27,17 @@
           >
             <div class="space-y-2.5">
               <div class="flex flex-wrap items-center gap-1.5">
-                <el-tag class="hotspot-chip hotspot-chip--source" size="small" round effect="light" type="info">{{ sourceLabel(item.sourceType) }}</el-tag>
                 <el-tag
-                  v-if="mode === 'monitor' && item.aiImportance"
-                  class="hotspot-chip hotspot-chip--trust"
+                  v-if="mode === 'monitor' && hasComputedHeat(item)"
+                  :class="['hotspot-chip', 'hotspot-chip--heat', heatClass(item.heatScore)]"
                   size="small"
                   round
-                  effect="dark"
-                  :type="importanceType(item.aiImportance, item.aiIsReal)"
+                  effect="plain"
                 >
-                  {{ importanceLabel(item.aiImportance, item.aiIsReal) }}
+                  {{ heatLabel(item) }}
                 </el-tag>
                 <el-tag
-                  v-else-if="mode === 'monitor'"
+                  v-else-if="mode === 'monitor' && !item.aiImportance"
                   class="hotspot-chip hotspot-chip--trust"
                   size="small"
                   round
@@ -49,24 +47,14 @@
                   待 AI 复核
                 </el-tag>
                 <el-tag
-                  v-if="mode === 'monitor' && item.aiRelevance !== null && item.aiRelevance !== undefined"
-                  class="hotspot-chip hotspot-chip--relevance"
+                  v-if="mode === 'monitor' && item.auditStatus"
+                  class="hotspot-chip hotspot-chip--audit"
                   size="small"
                   round
-                  effect="plain"
-                  type="primary"
+                  effect="dark"
+                  :type="auditStatusType(item.auditStatus)"
                 >
-                  相关度 {{ item.aiRelevance }}
-                </el-tag>
-                <el-tag
-                  v-else-if="mode === 'monitor'"
-                  class="hotspot-chip hotspot-chip--relevance"
-                  size="small"
-                  round
-                  effect="plain"
-                  type="warning"
-                >
-                  可信度待补齐
+                  {{ auditStatusLabel(item.auditStatus) }}
                 </el-tag>
                 <el-tag
                   class="hotspot-chip hotspot-chip--trust"
@@ -97,6 +85,56 @@
                 >
                   直接提及
                 </el-tag>
+                <el-tag class="hotspot-chip hotspot-chip--source" size="small" round effect="light" type="info">{{ sourceLabel(item.sourceType) }}</el-tag>
+                <el-tag
+                  v-if="mode === 'monitor' && item.aiRelevance !== null && item.aiRelevance !== undefined"
+                  class="hotspot-chip hotspot-chip--relevance"
+                  size="small"
+                  round
+                  effect="plain"
+                  type="primary"
+                >
+                  相关度 {{ item.aiRelevance }}
+                </el-tag>
+                <el-tag
+                  v-if="mode === 'monitor' && item.trustScore !== null && item.trustScore !== undefined"
+                  class="hotspot-chip hotspot-chip--score"
+                  size="small"
+                  round
+                  effect="plain"
+                  :type="trustScoreType(item.trustScore)"
+                >
+                  可信分 {{ item.trustScore }}
+                </el-tag>
+                <el-tag
+                  v-if="mode === 'monitor' && item.independentSourceCount"
+                  class="hotspot-chip hotspot-chip--score"
+                  size="small"
+                  round
+                  effect="plain"
+                  type="success"
+                >
+                  {{ item.independentSourceCount }} 源佐证
+                </el-tag>
+                <el-tag
+                  v-if="mode === 'monitor' && item.hasOfficialSource"
+                  class="hotspot-chip hotspot-chip--direct"
+                  size="small"
+                  round
+                  effect="plain"
+                >
+                  官方一手来源
+                </el-tag>
+                <el-tag
+                  v-else-if="mode === 'monitor'"
+                  class="hotspot-chip hotspot-chip--relevance"
+                  size="small"
+                  round
+                  effect="plain"
+                  type="warning"
+                >
+                  可信度待补齐
+                </el-tag>
               </div>
 
               <div class="space-y-2">
@@ -124,6 +162,23 @@
                     <ul class="mt-2 space-y-1.5 pl-5 text-[12px] leading-5 text-slate-400/90">
                       <li v-for="(reason, index) in extractAiEvidence(item)" :key="`${item.id}-reason-${index}`" class="list-disc">
                         {{ reason }}
+                      </li>
+                      <li
+                        v-for="flag in extractAuditFlags(item)"
+                        :key="`${item.id}-flag-${flag}`"
+                        class="list-disc text-amber-200/80"
+                      >
+                        风险标记：{{ auditFlagLabel(flag) }}
+                      </li>
+                      <li v-if="item.evidenceScore !== undefined" class="list-disc">
+                        证据分 {{ item.evidenceScore }}，佐证分 {{ item.corroborationScore }}，矛盾分 {{ item.contradictionScore }}
+                      </li>
+                      <li
+                        v-for="claim in item.claims || []"
+                        :key="`${item.id}-claim-${claim.id}`"
+                        class="list-disc"
+                      >
+                        {{ claimStatusLabel(claim.status) }}：{{ claim.statement }}
                       </li>
                     </ul>
                   </details>
@@ -203,27 +258,77 @@ const props = defineProps({
   }
 });
 
-function importanceType(importance, isReal) {
-  if (isReal === false) return 'danger';
-  if (importance === 'urgent') return 'success';
-  if (importance === 'high') return 'primary';
-  if (importance === 'medium') return 'primary';
-  return 'info';
+function heatClass(score) {
+  const value = Number(score);
+  if (value >= 80) return 'hotspot-chip--heat-blast';
+  if (value >= 60) return 'hotspot-chip--heat-hot';
+  if (value >= 40) return 'hotspot-chip--heat-warm';
+  return 'hotspot-chip--heat-cold';
 }
 
-function importanceLabel(importance, isReal) {
-  if (isReal === false) {
-    return '不可信';
+function hasComputedHeat(item) {
+  const score = item?.heatScore;
+  return score !== null && score !== undefined && score !== '' && Number.isFinite(Number(score));
+}
+
+function heatLabel(item) {
+  if (item?.aiIsReal === false) {
+    return '低可信';
   }
 
+  const score = Number(item?.heatScore);
+  const label = String(item?.heatLabel || '').trim();
+  if (Number.isFinite(score)) {
+    return `${label || localHeatLabel(score)} ${score}`;
+  }
+
+  return '';
+}
+
+function localHeatLabel(score) {
+  if (score >= 80) return '爆';
+  if (score >= 60) return '热';
+  if (score >= 40) return '温';
+  return '冷';
+}
+
+function auditStatusLabel(status) {
   const labels = {
-    low: '待验证',
-    medium: '较可信',
-    high: '可信',
-    urgent: '高度可信'
+    trusted: '可信',
+    needs_review: '待核验',
+    low_evidence: '低证据',
+    noise: '搜索噪音'
   };
 
-  return labels[importance] || '待验证';
+  return labels[status] || '待核验';
+}
+
+function claimStatusLabel(status) {
+  const labels = {
+    supported: '已支持',
+    partially_supported: '部分支持',
+    contradicted: '存在反证',
+    unverified: '未验证'
+  };
+  return labels[status] || '未验证';
+}
+
+function auditStatusType(status) {
+  const types = {
+    trusted: 'success',
+    needs_review: 'warning',
+    low_evidence: 'info',
+    noise: 'danger'
+  };
+
+  return types[status] || 'warning';
+}
+
+function trustScoreType(score) {
+  const value = Number(score);
+  if (value >= 75) return 'success';
+  if (value >= 50) return 'warning';
+  return 'danger';
 }
 
 function hasDirectMention(item) {
@@ -250,7 +355,6 @@ function sourceLabel(sourceType) {
     'google-news': '谷歌资讯',
     'hacker-news': 'Hacker News',
     bilibili: '哔哩哔哩',
-    weibo: '微博',
     sogou: '搜狗'
   };
 
@@ -383,6 +487,39 @@ function extractAiEvidence(item) {
   return ['这条热点已入库，但当前还没有完成 AI 真假与可信度分析。'];
 }
 
+function extractAuditFlags(item) {
+  const raw = item?.auditFlagsJson;
+  if (!raw) {
+    return [];
+  }
+
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function auditFlagLabel(flag) {
+  const labels = {
+    search_noise: '疑似搜索结果或聚合页',
+    collection_or_series: '合集或系列内容',
+    tutorial_not_hotspot: '教程内容，热点属性较弱',
+    marketing_language: '标题有营销化表达',
+    missing_snippet_low_source: '摘要不足且来源较弱',
+    title_is_query: '标题像查询词',
+    numeric_or_duration_title: '标题像数字或时长',
+    title_too_short: '标题过短'
+  };
+
+  return labels[flag] || flag;
+}
+
 function formatCount(value) {
   const count = Number(value);
   if (!Number.isFinite(count)) {
@@ -459,6 +596,37 @@ function formatRelativeTime(value) {
 
 :deep(.hotspot-chip--trust) {
   font-weight: 600;
+}
+
+:deep(.hotspot-chip--heat) {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(6px);
+}
+
+:deep(.hotspot-chip--heat-cold) {
+  border-color: rgba(100, 181, 246, 0.38);
+  background: rgba(37, 99, 235, 0.14);
+  color: #bfdbfe;
+}
+
+:deep(.hotspot-chip--heat-warm) {
+  border-color: rgba(251, 191, 36, 0.42);
+  background: rgba(217, 119, 6, 0.16);
+  color: #fde68a;
+}
+
+:deep(.hotspot-chip--heat-hot) {
+  border-color: rgba(248, 113, 113, 0.48);
+  background: rgba(220, 38, 38, 0.18);
+  color: #fecaca;
+}
+
+:deep(.hotspot-chip--heat-blast) {
+  border-color: rgba(220, 38, 38, 0.62);
+  background: rgba(127, 29, 29, 0.36);
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.18);
+  color: #fff1f2;
 }
 
 :deep(.hotspot-chip--relevance) {

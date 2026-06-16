@@ -1,5 +1,12 @@
 <template>
-  <AppFrame :socket-state="store.socketState" :live-message="store.liveMessage" :loading="store.loading" @run-search="store.runSearch">
+  <AppFrame
+    :socket-state="store.socketState"
+    :live-message="store.liveMessage"
+    :loading="store.loading"
+    :latest-scan-inbox="store.latestScanInbox"
+    @run-search="store.runSearch"
+    @read-latest-scan-item="store.markLatestScanInboxItemRead"
+  >
     <RouterView />
   </AppFrame>
 </template>

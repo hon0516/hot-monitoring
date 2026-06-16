@@ -2,7 +2,7 @@
   <div class="app-shell relative">
     <el-container class="mx-auto box-border h-full max-w-[1600px] px-4 py-4 lg:px-5">
       <el-main class="flex h-full min-w-0 flex-1 flex-col gap-3 overflow-hidden p-0">
-        <header class="flex flex-col gap-3">
+        <header class="app-shell__header flex flex-col gap-3">
           <section class="glass-card scanline hero-banner rounded-[10px] px-5 py-3.5 lg:px-7 lg:py-4">
             <div class="hero-banner__glow"></div>
             <div class="hero-banner__frame"></div>
@@ -27,7 +27,8 @@
                 </RouterLink>
               </nav>
 
-              <div class="flex lg:justify-end">
+              <div class="flex items-center gap-2 lg:justify-end">
+                <LatestScanBell :inbox="latestScanInbox" @read-item="$emit('read-latest-scan-item', $event)" />
                 <el-button class="nav-action self-start lg:self-auto" type="primary" :loading="loading" round @click="$emit('run-search')">
                   {{ loading ? '扫描中...' : '立即扫描' }}
                 </el-button>
@@ -46,6 +47,7 @@
 
 <script setup>
 import { useRoute } from 'vue-router';
+import LatestScanBell from './LatestScanBell.vue';
 
 const props = defineProps({
   socketState: {
@@ -59,10 +61,21 @@ const props = defineProps({
   loading: {
     type: Boolean,
     default: false
+  },
+  latestScanInbox: {
+    type: Object,
+    default: () => ({
+      scanJobId: null,
+      trigger: null,
+      scannedAt: null,
+      unreadCount: 0,
+      total: 0,
+      items: []
+    })
   }
 });
 
-defineEmits(['run-search']);
+defineEmits(['run-search', 'read-latest-scan-item']);
 
 const route = useRoute();
 

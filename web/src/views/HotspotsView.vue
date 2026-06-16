@@ -2,10 +2,19 @@
   <div class="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
     <HotspotFeed :items="sortedHotspots" :show-header="false">
       <template #actions>
-        <el-tag class="hotspot-chip" round effect="plain">{{ store.pagination.total }} 条记录</el-tag>
+        <div class="flex items-center gap-2">
+          <el-tag class="hotspot-chip" round effect="plain">{{ store.pagination.total }} 条记录</el-tag>
+        </div>
       </template>
       <template #toolbar>
         <div ref="toolbarRoot" class="hotspot-toolbar">
+          <button
+            v-if="toolbarOpen"
+            type="button"
+            class="hotspot-toolbar__scrim"
+            aria-label="关闭筛选与排序"
+            @click="toolbarOpen = false"
+          />
           <div class="hotspot-toolbar__tabs">
             <button
               v-for="tab in sourceTabs"
@@ -70,29 +79,21 @@
                       <el-option value="hacker-news" label="Hacker News" />
                       <el-option value="twitter" label="推特 / X" />
                       <el-option value="bilibili" label="哔哩哔哩" />
-                      <el-option value="weibo" label="微博搜索" />
                       <el-option value="sogou" label="搜狗搜索" />
                     </el-select>
                   </el-form-item>
 
                   <el-form-item class="mb-0 hotspot-filterbar__field">
-                    <el-select v-model="filters.importance" size="small" placeholder="全部重要度" clearable>
-                      <el-option value="low" label="低" />
-                      <el-option value="medium" label="中" />
-                      <el-option value="high" label="高" />
-                      <el-option value="urgent" label="紧急" />
+                    <el-select v-model="filters.status" size="small" placeholder="全部状态">
+                      <el-option value="all" label="全部状态" />
+                      <el-option value="trusted" label="可信" />
+                      <el-option value="needs_review" label="待核验" />
                     </el-select>
                   </el-form-item>
 
-                  <button
-                    type="button"
-                    class="hotspot-filterbar__switch"
-                    :class="{ 'is-active': filters.onlyReal }"
-                    @click="filters.onlyReal = !filters.onlyReal"
-                  >
-                    <span class="hotspot-filterbar__switch-knob" />
-                    <span class="hotspot-filterbar__switch-copy">仅真实热点</span>
-                  </button>
+                  <div class="hotspot-toolbar__meta-pill">
+                    {{ verificationStatusHint }}
+                  </div>
 
                   <div class="hotspot-filterbar__actions">
                     <el-button type="primary" size="small" round @click="applyFiltersAndHide">应用</el-button>
@@ -146,7 +147,6 @@ const sourceLabels = {
   'hacker-news': 'Hacker News',
   twitter: '推特 / X',
   bilibili: '哔哩哔哩',
-  weibo: '微博搜索',
   sogou: '搜狗搜索'
 };
 
@@ -158,14 +158,14 @@ const toolbarRoot = ref(null);
 
 const filters = reactive({
   keyword: '',
+  sourceType: '',
   importance: '',
-  onlyReal: false
+  status: 'all'
 });
 
 const sortOptions = [
   { key: 'latestPublished', label: '最新发布' },
   { key: 'latestDiscovered', label: '最新发现' },
-  { key: 'importance', label: '重要程度' },
   { key: 'relevance', label: '相关性' },
   { key: 'heat', label: '热度' }
 ];
@@ -181,30 +181,42 @@ const activeFilterCount = computed(() => {
   let count = 0;
 
   if (filters.keyword.trim()) count += 1;
-  if (filters.importance) count += 1;
-  if (filters.onlyReal) count += 1;
+  if (filters.status !== 'all') count += 1;
 
   return count;
 });
 
 const activeControlCount = computed(() => activeFilterCount.value + activeSorts.value.length);
 
+const verificationStatusHint = computed(() => {
+  if (filters.status === 'trusted') {
+    return '仅展示深度核验通过的可信事件';
+  }
+
+  if (filters.status === 'needs_review') {
+    return '仅展示单一来源或证据尚未充分的事件';
+  }
+
+  return '展示可信与待核验事件，已拒绝内容仍保持隐藏';
+});
+
 const sourceTabCounts = computed(() => {
   const counts = {
-    all: store.hotspots.length,
+    all: Number(store.sourceCounts.all || store.pagination.total || 0),
     bing: 0,
     'google-news': 0,
     'hacker-news': 0,
     twitter: 0,
     bilibili: 0,
-    weibo: 0,
     sogou: 0
   };
 
-  for (const item of store.hotspots) {
-    if (item?.sourceType in counts) {
-      counts[item.sourceType] += 1;
+  for (const source of Object.keys(counts)) {
+    if (source === 'all') {
+      continue;
     }
+
+    counts[source] = Number(store.sourceCounts[source] || 0);
   }
 
   return counts;
@@ -219,10 +231,7 @@ const sourceTabs = computed(() =>
 );
 
 const sortedHotspots = computed(() => {
-  const items =
-    activeSourceTab.value === 'all'
-      ? [...store.hotspots]
-      : store.hotspots.filter((item) => item.sourceType === activeSourceTab.value);
+  const items = [...store.hotspots];
 
   if (!activeSorts.value.length) {
     return items;
@@ -232,9 +241,9 @@ const sortedHotspots = computed(() => {
 });
 
 function applyFilters() {
+  activeSourceTab.value = filters.sourceType || 'all';
   store.fetchHotspots({
-    ...filters,
-    onlyReal: String(filters.onlyReal)
+    ...filters
   });
 }
 
@@ -245,6 +254,8 @@ function applyFiltersAndHide() {
 
 function selectSourceTab(key) {
   activeSourceTab.value = key;
+  filters.sourceType = key === 'all' ? '' : key;
+  applyFilters();
 }
 
 function handlePointerDown(event) {
@@ -269,8 +280,10 @@ onBeforeUnmount(() => {
 
 function resetFilters() {
   filters.keyword = '';
+  filters.sourceType = '';
   filters.importance = '';
-  filters.onlyReal = false;
+  filters.status = 'all';
+  activeSourceTab.value = 'all';
   applyFilters();
 }
 
@@ -308,10 +321,6 @@ function compareByKey(left, right, key) {
     return normalizeTimestamp(right.discoveredAt) - normalizeTimestamp(left.discoveredAt);
   }
 
-  if (key === 'importance') {
-    return importanceWeight(right.aiImportance) - importanceWeight(left.aiImportance);
-  }
-
   if (key === 'relevance') {
     return numericValue(right.aiRelevance) - numericValue(left.aiRelevance);
   }
@@ -324,6 +333,11 @@ function compareByKey(left, right, key) {
 }
 
 function fallbackCompare(left, right) {
+  const trustDiff = numericValue(right.trustScore) - numericValue(left.trustScore);
+  if (trustDiff !== 0) {
+    return trustDiff;
+  }
+
   const discoveredDiff = normalizeTimestamp(right.discoveredAt) - normalizeTimestamp(left.discoveredAt);
   if (discoveredDiff !== 0) {
     return discoveredDiff;
@@ -351,73 +365,7 @@ function numericValue(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
-function importanceWeight(value) {
-  const weights = {
-    urgent: 4,
-    high: 3,
-    medium: 2,
-    low: 1
-  };
-
-  return weights[value] || 0;
-}
-
 function heatScore(item) {
-  const base =
-    numericValue(item.aiRelevance) * 10 +
-    importanceWeight(item.aiImportance) * 40 +
-    truthWeight(item.aiIsReal) * 12 +
-    freshnessWeight(item);
-
-  const engagement = parseEngagement(item.engagementJson);
-  if (!engagement) {
-    return base;
-  }
-
-  return (
-    base +
-    numericValue(engagement.views || engagement.reads) / 100 +
-    numericValue(engagement.likes || engagement.points) * 6 +
-    numericValue(engagement.comments || engagement.replies) * 5 +
-    numericValue(engagement.retweets) * 4
-  );
-}
-
-function truthWeight(value) {
-  if (value === true) {
-    return 1;
-  }
-
-  if (value === false) {
-    return -1;
-  }
-
-  return 0;
-}
-
-function freshnessWeight(item) {
-  const timestamp = normalizeTimestamp(item.sourcePublishedAt) || normalizeTimestamp(item.discoveredAt);
-  if (!timestamp) {
-    return 0;
-  }
-
-  const diffHours = Math.max(0, (Date.now() - timestamp) / (1000 * 60 * 60));
-  return Math.max(0, 72 - diffHours);
-}
-
-function parseEngagement(engagementJson) {
-  if (!engagementJson) {
-    return null;
-  }
-
-  if (typeof engagementJson === 'object') {
-    return engagementJson;
-  }
-
-  try {
-    return JSON.parse(engagementJson);
-  } catch {
-    return null;
-  }
+  return numericValue(item.heatScore);
 }
 </script>

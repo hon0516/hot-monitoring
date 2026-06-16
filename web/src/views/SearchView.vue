@@ -85,7 +85,6 @@ const sourceLabels = {
   'hacker-news': 'Hacker News',
   twitter: '推特 / X',
   bilibili: '哔哩哔哩',
-  weibo: '微博搜索',
   sogou: '搜狗搜索'
 };
 
@@ -108,7 +107,6 @@ const enabledSourceCount = computed(() => {
     store.settings.hackerNewsSourceEnabled,
     store.settings.twitterSourceEnabled,
     store.settings.bilibiliSourceEnabled,
-    store.settings.weiboSourceEnabled,
     store.settings.sogouSourceEnabled
   ].filter(Boolean).length;
 });
@@ -121,7 +119,6 @@ const sourceTabCounts = computed(() => {
     'hacker-news': 0,
     twitter: 0,
     bilibili: 0,
-    weibo: 0,
     sogou: 0
   };
 

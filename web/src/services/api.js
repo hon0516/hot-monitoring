@@ -28,6 +28,9 @@ export const api = {
   deleteKeyword: (id) => request(`/api/keywords/${id}`, { method: 'DELETE' }),
   getHotspots: (params = {}) => request(`/api/hotspots?${new URLSearchParams(params).toString()}`),
   getHotspot: (id) => request(`/api/hotspots/${id}`),
+  getHotspotEvidence: (id) => request(`/api/hotspots/${id}/evidence`),
+  saveHotspotFeedback: (id, data) =>
+    request(`/api/hotspots/${id}/feedback`, { method: 'POST', body: JSON.stringify(data) }),
   getSummary: () => request('/api/hotspots/summary'),
   runSearch: () => request('/api/hotspots/search', { method: 'POST', body: JSON.stringify({}) }),
   getSearchStatus: () => request('/api/hotspots/search/status'),
@@ -36,7 +39,14 @@ export const api = {
   getSettings: () => request('/api/settings'),
   updateSettings: (data) => request('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
   getNotifications: () => request('/api/notifications'),
-  getHealth: () => request('/api/health')
+  getLatestScanInbox: () => request('/api/notifications/latest-scan'),
+  markLatestScanInboxItemRead: (itemId) =>
+    request(`/api/notifications/latest-scan/items/${itemId}/read`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    }),
+  getHealth: () => request('/api/health'),
+  getSourceHealth: () => request('/api/sources/health')
 };
 
 export { API_BASE };

@@ -1,7 +1,12 @@
 <template>
   <el-scrollbar class="page-scroll h-full">
     <div class="grid min-h-full gap-6 pr-1 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <SettingsPanel v-if="store.settings" :settings="store.settings" @save="handleSave" />
+      <SettingsPanel
+        v-if="store.settings"
+        :settings="store.settings"
+        :source-health="store.sourceHealth"
+        @save="handleSave"
+      />
       <NotificationRail :items="store.notifications.slice(0, 6)" />
     </div>
   </el-scrollbar>

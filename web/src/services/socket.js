@@ -1,6 +1,6 @@
 import { API_BASE } from './api';
 
-export function createSocketHandlers({ onHotspotNew, onNotification, onStateChange }) {
+export function createSocketHandlers({ onHotspotNew, onNotification, onLatestScan, onStateChange }) {
   let socket = null;
 
   const connect = () => {
@@ -24,6 +24,7 @@ export function createSocketHandlers({ onHotspotNew, onNotification, onStateChan
       const message = JSON.parse(event.data);
       if (message.event === 'hotspot:new') onHotspotNew?.(message.payload);
       if (message.event === 'notification') onNotification?.(message.payload);
+      if (message.event === 'scan:latest') onLatestScan?.(message.payload);
     });
   };
 

@@ -77,7 +77,6 @@ const labels = {
   'hacker-news': 'Hacker News',
   twitter: '推特 / X',
   bilibili: '哔哩哔哩',
-  weibo: '微博搜索',
   sogou: '搜狗搜索'
 };
 
@@ -102,10 +101,6 @@ const sourceMeta = {
     icon: VideoPlay,
     iconClass: 'source-coverage-card__icon--rose'
   },
-  weibo: {
-    icon: ChatDotRound,
-    iconClass: 'source-coverage-card__icon--orange'
-  },
   sogou: {
     icon: Search,
     iconClass: 'source-coverage-card__icon--emerald'
@@ -119,7 +114,6 @@ const fallbackStats = computed(() => {
     'hacker-news': 0,
     twitter: 0,
     bilibili: 0,
-    weibo: 0,
     sogou: 0
   };
 
