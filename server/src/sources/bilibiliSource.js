@@ -3,9 +3,43 @@ import { env } from '../config/env.js';
 import { dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
 import { fetchJson, fetchText, normalizeText, safeJsonStringify, stripHtml, toIsoString } from './sourceClient.js';
 
+function isSuspiciousBilibiliTitle(title) {
+  const normalized = normalizeText(title);
+  if (!normalized) {
+    return true;
+  }
+
+  // HTML fallback pages sometimes expose duration overlays like 00:17:22 as anchors.
+  if (/^[\d\s:：.]+$/.test(normalized) && /[:：]/.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
+function extractBilibiliTitle($element) {
+  const attributeTitle =
+    $element.attr('title') ||
+    $element.attr('data-title') ||
+    $element.attr('aria-label') ||
+    $element.attr('alt');
+
+  if (attributeTitle) {
+    return stripHtml(attributeTitle);
+  }
+
+  const className = String($element.attr('class') || '');
+  if (/title|tit|heading/i.test(className)) {
+    return stripHtml($element.text());
+  }
+
+  return '';
+}
+
 export function mapBilibiliSearchResults(items = []) {
   return items
     .filter((item) => item?.type === 'video' && item.arcurl && item.title)
+    .filter((item) => !isSuspiciousBilibiliTitle(stripHtml(item.title)))
     .map((item) => ({
       title: stripHtml(item.title),
       snippet: stripHtml(item.description || item.tag || ''),
@@ -30,10 +64,9 @@ export function parseBilibiliSearchHtml(html) {
 
   $('a[href*="/video/BV"]').each((_, element) => {
     const href = $(element).attr('href');
-    const rawTitle = $(element).attr('title') || $(element).text();
-    const title = stripHtml(rawTitle);
+    const title = extractBilibiliTitle($(element));
 
-    if (!href || !title) {
+    if (!href || !title || isSuspiciousBilibiliTitle(title)) {
       return;
     }
 

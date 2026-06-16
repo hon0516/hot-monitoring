@@ -74,6 +74,8 @@ export function stripHtml(value) {
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#x2F;/gi, '/')
     .replace(/\s+/g, ' ')
     .trim();
 }

@@ -1,12 +1,16 @@
 import * as cheerio from 'cheerio';
-import { buildQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
+import { buildInternationalQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
 
 export async function searchGoogleNews({ keyword, scope }) {
   const results = [];
-  const queries = buildQueryVariants({ keyword, scope });
+  const queries = buildInternationalQueryVariants({ keyword, scope });
 
   for (const query of queries) {
-    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans`;
+    const prefersEnglish = /[a-z]{2,}/i.test(query) && !/[\u4e00-\u9fff]/u.test(query);
+    const locale = prefersEnglish
+      ? { hl: 'en-US', gl: 'US', ceid: 'US:en' }
+      : { hl: 'zh-CN', gl: 'CN', ceid: 'CN:zh-Hans' };
+    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${locale.hl}&gl=${locale.gl}&ceid=${locale.ceid}`;
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'

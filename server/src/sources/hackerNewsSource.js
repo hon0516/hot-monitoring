@@ -1,8 +1,8 @@
-import { buildQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
+import { buildInternationalQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
 
 export async function searchHackerNews({ keyword, scope }) {
   const results = [];
-  const queries = buildQueryVariants({ keyword, scope });
+  const queries = buildInternationalQueryVariants({ keyword, scope });
 
   for (const query of queries) {
     const url = new URL('https://hn.algolia.com/api/v1/search_by_date');

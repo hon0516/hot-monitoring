@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import { configState, env } from '../config/env.js';
 import { buildQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
 import { fetchText, isChallengePage, parseCount, safeJsonStringify, stripHtml, toIsoString } from './sourceClient.js';
+import { searchWeiboHot } from './weiboHotSource.js';
 
 function resolveWeiboUrl(href) {
   if (!href) {
@@ -110,5 +111,15 @@ export async function searchWeibo({ keyword, scope }) {
     }
   }
 
-  return dedupeSourceItems(filterRecentSourceItems(results)).slice(0, 10);
+  const dedupedResults = dedupeSourceItems(filterRecentSourceItems(results)).slice(0, 10);
+  if (dedupedResults.length > 0) {
+    return dedupedResults;
+  }
+
+  try {
+    return await searchWeiboHot({ keyword });
+  } catch (error) {
+    console.warn(`[weibo] 热搜回退失败: ${error.message}`);
+    return [];
+  }
 }

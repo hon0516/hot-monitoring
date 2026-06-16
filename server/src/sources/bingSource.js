@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { buildQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
+import { buildInternationalQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
 
 const USER_AGENTS = [
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36',
@@ -13,10 +13,11 @@ function pickUserAgent() {
 
 export async function searchBing({ keyword, scope }) {
   const results = [];
-  const queries = buildQueryVariants({ keyword, scope });
+  const queries = buildInternationalQueryVariants({ keyword, scope });
 
   for (const query of queries) {
-    const url = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=rss&setlang=zh-Hans`;
+    const setlang = /[a-z]{2,}/i.test(query) && !/[\u4e00-\u9fff]/u.test(query) ? 'en-US' : 'zh-Hans';
+    const url = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=rss&setlang=${setlang}`;
     const response = await fetch(url, {
       headers: {
         'User-Agent': pickUserAgent()

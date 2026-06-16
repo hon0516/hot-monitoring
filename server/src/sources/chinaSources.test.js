@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapBilibiliSearchResults, parseBilibiliSearchHtml, searchBilibili } from './bilibiliSource.js';
 import { searchSogou, parseSogouSearchResults } from './sogouSource.js';
 import { parseWeiboRealtimePage, searchWeibo } from './weiboSource.js';
+import { parseWeiboHotMarkdown, searchWeiboHot } from './weiboHotSource.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -114,6 +115,24 @@ describe('china source runners', () => {
     });
   });
 
+  it('ignores bilibili duration overlays when parsing fallback html', () => {
+    const html = `
+      <div class="video-item">
+        <a href="//www.bilibili.com/video/BV1abc">00:17:22</a>
+        <a class="video-title" href="//www.bilibili.com/video/BV1abc" title="AI 视频解析">AI 视频解析</a>
+        <div class="desc">一段摘要</div>
+        <div class="up-name">测试 UP</div>
+      </div>
+    `;
+
+    const items = parseBilibiliSearchHtml(html);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      title: 'AI 视频解析',
+      sourceAuthor: '测试 UP'
+    });
+  });
+
   it('searchBilibili falls back to html parsing after 412', async () => {
     vi.stubGlobal(
       'fetch',
@@ -146,28 +165,53 @@ describe('china source runners', () => {
   it('searchWeibo filters hot list by query terms', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          text: async () => '<title>Sina Visitor System</title>'
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            data: {
-              realtime: [
-                { word: 'AI 模型发布', note: 'AI 模型发布', num: 100, word_scheme: '#AI模型发布#' },
-                { word: '体育新闻', note: '体育新闻', num: 50, word_scheme: '#体育新闻#' }
-              ]
-            }
-          })
-        })
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => `
+          <title>Sina Visitor System</title>
+          最后更新时间：2026-06-07 12:00
+          1. [AI 模型发布](https://s.weibo.com/weibo?q=%23AI%E6%A8%A1%E5%9E%8B%E5%8F%91%E5%B8%83%23) 100
+          2. [体育新闻](https://s.weibo.com/weibo?q=%23%E4%BD%93%E8%82%B2%E6%96%B0%E9%97%BB%23) 50
+        `
+      })
     );
 
     const items = await searchWeibo({ keyword: 'AI', scope: '' });
     expect(items).toHaveLength(1);
-    expect(items[0].sourceType).toBe('weibo');
+    expect(items[0].sourceType).toBe('weibo-hot');
+  });
+
+  it('parses weibo hot markdown mirror', () => {
+    const items = parseWeiboHotMarkdown(`
+      最后更新时间：2026-06-07 12:00
+      1. [AI 模型发布](https://s.weibo.com/weibo?q=%23AI%E6%A8%A1%E5%9E%8B%E5%8F%91%E5%B8%83%23) 100
+      2. [体育新闻](https://s.weibo.com/weibo?q=%23%E4%BD%93%E8%82%B2%E6%96%B0%E9%97%BB%23) 50
+    `);
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      title: 'AI 模型发布',
+      sourceType: 'weibo-hot',
+      sourceAuthor: '微博热搜'
+    });
+  });
+
+  it('searchWeiboHot filters mirror results by keyword', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => `
+          最后更新时间：2026-06-07 12:00
+          1. [AI 模型发布](https://s.weibo.com/weibo?q=%23AI%E6%A8%A1%E5%9E%8B%E5%8F%91%E5%B8%83%23) 100
+          2. [体育新闻](https://s.weibo.com/weibo?q=%23%E4%BD%93%E8%82%B2%E6%96%B0%E9%97%BB%23) 50
+        `
+      })
+    );
+
+    const items = await searchWeiboHot({ keyword: 'AI' });
+    expect(items).toHaveLength(1);
+    expect(items[0].sourceType).toBe('weibo-hot');
   });
 
   it('searchWeibo prefers realtime page results when accessible', async () => {
@@ -181,7 +225,7 @@ describe('china source runners', () => {
               <div class="content">
                 <div class="info"><a class="name" href="/u/1">测试用户</a></div>
                 <p node-type="feed_list_content">AI 新模型正式发布</p>
-                <div class="from"><a href="//weibo.com/1/abc">2026-04-22 12:30</a></div>
+                <div class="from"><a href="//weibo.com/1/abc">2026-06-06 12:30</a></div>
               </div>
             </div>
           </div>
