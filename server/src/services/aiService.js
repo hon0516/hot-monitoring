@@ -1,47 +1,10 @@
 import { env, configState } from '../config/env.js';
 import { stripHtml } from '../sources/sourceClient.js';
 
-const ANALYSIS_PROMPT = `
-你是关键词感知的热点审核器。基于 keyword、preMatch、title、snippet 和 ruleAudit，判断内容是否真实、是否直接相关。
-
-要求：
-1. 只输出一个 JSON 对象。
-2. 不要输出解释、Markdown、推理过程。
-3. 重点区分：真实存在、直接相关、值得作为热点展示。
-4. 同领域但没有直接提及 keyword 或等价说法，relevance 必须低于 60。
-5. 教程、合集、搜索结果页、营销内容即使包含 keyword，也默认 low 或 medium。
-6. summary 必须用中文，格式固定为：此内容与【keyword】的关联：...
-7. relevanceReason 用一句话解释相关性打分理由，不要写推理过程。
-8. relevance 是 0-100 整数；importance 只能是 low、medium、high、urgent。
-
-返回：
-{
-  "isReal": true,
-  "confidence": 72,
-  "relevance": 78,
-  "relevanceReason": "标题直接提及关键词并讨论其产品更新。",
-  "keywordMentioned": true,
-  "importance": "medium",
-  "riskFlags": ["low_evidence"],
-  "summary": "此内容与【AI编程】的关联：..."
-}
-`;
-
-const MAX_ANALYSIS_TITLE_CHARS = 160;
-const MAX_ANALYSIS_SNIPPET_CHARS = 320;
 const MAX_ANALYSIS_OUTPUT_TOKENS = 120;
 const MAX_KEYWORD_VARIANTS = 12;
 
 const keywordExpansionCache = new Map();
-
-function trimText(value, maxLength) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  if (!text || text.length <= maxLength) {
-    return text;
-  }
-
-  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
-}
 
 function uniqueCompactList(items, limit = MAX_KEYWORD_VARIANTS) {
   const seen = new Set();
@@ -135,45 +98,6 @@ export function preMatchKeyword(text, expandedKeywords = []) {
   };
 }
 
-function compactRuleAudit(evidencePackage) {
-  if (!evidencePackage) {
-    return null;
-  }
-
-  return {
-    auditVersion: evidencePackage.auditVersion,
-    sourceType: evidencePackage.sourceType,
-    hostname: evidencePackage.hostname,
-    sourceQualityScore: evidencePackage.sourceQualityScore,
-    ruleTrustScore: evidencePackage.ruleTrustScore,
-    ruleRelevanceScore: evidencePackage.ruleRelevanceScore,
-    contentType: evidencePackage.contentType,
-    keywordMatchType: evidencePackage.keywordMatchType,
-    riskFlags: Array.isArray(evidencePackage.riskFlags) ? evidencePackage.riskFlags.slice(0, 4) : [],
-    positiveSignals: Array.isArray(evidencePackage.positiveSignals) ? evidencePackage.positiveSignals.slice(0, 4) : [],
-    ruleEvidence: Array.isArray(evidencePackage.ruleEvidence)
-      ? evidencePackage.ruleEvidence.map((item) => trimText(item, 48)).slice(0, 3)
-      : []
-  };
-}
-
-function buildAnalysisPayload({ scope, keyword, item, evidencePackage, preMatch, currentTime }) {
-  return {
-    scope,
-    keyword,
-    currentTime: currentTime.toISOString(),
-    title: trimText(item?.title, MAX_ANALYSIS_TITLE_CHARS),
-    snippet: trimText(stripHtml(item?.snippet || ''), MAX_ANALYSIS_SNIPPET_CHARS),
-    sourceType: item?.sourceType || '',
-    publishedAt: item?.sourcePublishedAt || null,
-    preMatch: {
-      matched: Boolean(preMatch?.matched),
-      matchedTerms: Array.isArray(preMatch?.matchedTerms) ? preMatch.matchedTerms.slice(0, 6) : []
-    },
-    ruleAudit: compactRuleAudit(evidencePackage)
-  };
-}
-
 const AI_PROVIDERS = {
   'tencent-tokenhub': {
     label: '腾讯 TokenHub',
@@ -230,7 +154,7 @@ function safeJsonParse(content) {
   }
 }
 
-async function requestAnalysis({ provider, payload, prompt = ANALYSIS_PROMPT, maxTokens }) {
+async function requestAnalysis({ provider, payload, prompt, maxTokens }) {
   const config = AI_PROVIDERS[provider];
 
   if (!config) {
@@ -338,43 +262,6 @@ export async function requestStructuredAnalysis({ settings, prompt, payload, max
   };
 }
 
-export async function analyzeHotspot({ settings, scope, keyword, item, evidencePackage, preMatch, prompt = ANALYSIS_PROMPT }) {
-  const provider = normalizeAiProvider(settings?.aiProvider);
-  const currentTime = new Date();
-  const payload = buildAnalysisPayload({
-    scope,
-    keyword,
-    item,
-    evidencePackage,
-    preMatch,
-    currentTime
-  });
-
-  let responsePayload = await requestAnalysis({
-    provider,
-    payload,
-    prompt
-  });
-  let parsed = parseAnalysisResponse(responsePayload);
-
-  if (!parsed) {
-    return null;
-  }
-
-  return {
-    provider,
-    isReal: normalizeIsReal(parsed.isReal),
-    confidence: normalizeRelevance(parsed.confidence),
-    relevance: normalizeRelevance(parsed.relevance),
-    relevanceReason: normalizeReason(parsed.relevanceReason),
-    keywordMentioned: normalizeKeywordMentioned(parsed.keywordMentioned, preMatch),
-    importance: normalizeImportance(parsed.importance),
-    riskFlags: normalizeRiskFlags(parsed.riskFlags),
-    summary: buildHotspotSummary({ value: parsed.summary, item, keyword }),
-    evidence: normalizeEvidence(parsed.relevanceReason || parsed.evidence, item, currentTime)
-  };
-}
-
 function parseAnalysisResponse(responsePayload) {
   const choice = responsePayload?.choices?.[0];
   const content = String(choice?.message?.content || '').trim();
@@ -383,57 +270,6 @@ function parseAnalysisResponse(responsePayload) {
   }
 
   return safeJsonParse(content);
-}
-
-function normalizeIsReal(value) {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (['true', '1', 'yes'].includes(normalized)) return true;
-    if (['false', '0', 'no'].includes(normalized)) return false;
-  }
-
-  return null;
-}
-
-function normalizeRelevance(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    return 50;
-  }
-
-  return Math.min(100, Math.max(0, Math.round(numeric)));
-}
-
-function normalizeImportance(value) {
-  return ['low', 'medium', 'high', 'urgent'].includes(value) ? value : 'medium';
-}
-
-function normalizeKeywordMentioned(value, preMatch) {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  return Boolean(preMatch?.matched);
-}
-
-function normalizeRiskFlags(value) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6);
-}
-
-function normalizeReason(value) {
-  return stripHtml(value || '').trim().slice(0, 160);
-}
-
-function normalizeSummary(value, item, keyword) {
-  return buildHotspotSummary({ value, item, keyword });
 }
 
 function summarizeFallbackText(item) {
@@ -509,20 +345,6 @@ function stripTrailingPunctuation(value) {
 
 export function normalizeSummaryForTest(value, item, keyword) {
   return buildHotspotSummary({ value, item, keyword });
-}
-
-function normalizeEvidence(value, item, now) {
-  const normalized = sanitizeEvidenceText(value, { publishedAt: item?.sourcePublishedAt, now });
-  if (normalized) {
-    return normalized;
-  }
-
-  const fallback = [
-    item?.sourceType ? `来源为 ${item.sourceType}，需结合原文判断。` : '来源信息有限，需结合原文判断。',
-    item?.sourcePublishedAt ? `发布时间可解析，时间线基本自洽。` : '发布时间缺失，可信度需保守评估。'
-  ];
-
-  return fallback.join('\n').slice(0, 240);
 }
 
 export function sanitizeEvidenceText(value, { publishedAt, now = new Date() } = {}) {

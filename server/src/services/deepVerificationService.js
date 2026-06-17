@@ -1,11 +1,13 @@
 import crypto from 'node:crypto';
 import { prisma } from '../db/prisma.js';
 import { requestStructuredAnalysis } from './aiService.js';
+import { semanticRelevanceScore } from './embeddingService.js';
 import { fetchArticleContent } from './contentService.js';
 import { buildEventFingerprint, findBestEventCluster, titleSimilarity } from './eventClusteringService.js';
 import { normalizeTitle } from '../utils/normalize.js';
 import { searchBing } from '../sources/bingSource.js';
 import { searchGoogleNews } from '../sources/googleNewsSource.js';
+import { verificationConfig, getSourceAuthority } from '../config/verificationConfig.js';
 
 export const DEEP_AUDIT_VERSION = 'deep-verify-v1';
 
@@ -53,14 +55,21 @@ const ADJUDICATION_PROMPT = `
 单一普通来源不得判 trusted；正文缺失或发布时间缺失不得判 trusted；存在核心事实反驳不得判 trusted。
 `;
 
-const SOURCE_QUALITY = {
-  'google-news': 82,
-  bing: 78,
-  'hacker-news': 74,
-  twitter: 52,
-  bilibili: 45,
-  sogou: 35
-};
+function buildReferenceText(keyword, scope) {
+  return [keyword, scope]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+function blendRelevance(llmRelevance, semanticRelevance) {
+  if (semanticRelevance === null || semanticRelevance === undefined) {
+    return clamp(llmRelevance);
+  }
+
+  const weight = verificationConfig.semantic.semanticWeight;
+  return clamp(Number(llmRelevance || 0) * (1 - weight) + Number(semanticRelevance) * weight);
+}
 
 function clamp(value) {
   const number = Number(value);
@@ -94,13 +103,22 @@ function sourceGroup(domain) {
   return parts.length >= 2 ? parts.slice(-2).join('.') : domain || '';
 }
 
-function buildFallbackUnderstanding({ keyword, article }) {
+function buildFallbackUnderstanding({ keyword, article, semanticRelevance = null }) {
   const text = `${article.title} ${article.snippet} ${article.bodyText.slice(0, 1200)}`.toLowerCase();
-  const normalizedKeyword = String(keyword || '').toLowerCase().replace(/\s+/g, '');
-  const directlyRelevant = normalizedKeyword && text.replace(/\s+/g, '').includes(normalizedKeyword);
+  // 优先用语义相关性兜底；仅当 embedding 不可用时才退回关键词子串匹配。
+  let directlyRelevant;
+  let relevanceScore;
+  if (semanticRelevance !== null && semanticRelevance !== undefined) {
+    directlyRelevant = semanticRelevance >= verificationConfig.semantic.hardFloorRelevance;
+    relevanceScore = clamp(semanticRelevance);
+  } else {
+    const normalizedKeyword = String(keyword || '').toLowerCase().replace(/\s+/g, '');
+    directlyRelevant = Boolean(normalizedKeyword && text.replace(/\s+/g, '').includes(normalizedKeyword));
+    relevanceScore = directlyRelevant ? 82 : 48;
+  }
   return {
     directlyRelevant,
-    relevanceScore: directlyRelevant ? 82 : 48,
+    relevanceScore,
     contentType: /教程|指南|tutorial|how to/iu.test(text) ? 'tutorial' : 'news',
     entities: [],
     claims: article.title ? [{ statement: article.title, importance: 'core' }] : [],
@@ -109,7 +127,7 @@ function buildFallbackUnderstanding({ keyword, article }) {
   };
 }
 
-async function understandContent({ settings, keyword, article }) {
+async function understandContent({ settings, keyword, article, semanticRelevance = null }) {
   const payload = {
     keyword,
     title: article.title,
@@ -129,10 +147,11 @@ async function understandContent({ settings, keyword, article }) {
       maxTokens: 1000
     });
     const value = result.value;
-    if (!value) return buildFallbackUnderstanding({ keyword, article });
+    if (!value) return buildFallbackUnderstanding({ keyword, article, semanticRelevance });
     return {
       directlyRelevant: value.directlyRelevant === true,
-      relevanceScore: clamp(value.relevanceScore),
+      relevanceScore: blendRelevance(value.relevanceScore, semanticRelevance),
+      semanticRelevance,
       contentType: String(value.contentType || 'news'),
       entities: safeArray(value.entities, 10).map(String),
       claims: safeArray(value.claims, 5)
@@ -145,7 +164,7 @@ async function understandContent({ settings, keyword, article }) {
       riskFlags: safeArray(value.riskFlags, 8).map(String)
     };
   } catch {
-    return buildFallbackUnderstanding({ keyword, article });
+    return buildFallbackUnderstanding({ keyword, article, semanticRelevance });
   }
 }
 
@@ -373,21 +392,33 @@ function calculateRuleScores({ sources, verifiedClaims, understanding }) {
   const contradicted = verifiedClaims.filter((claim) => claim.status === 'contradicted').length;
   const claimCount = Math.max(1, verifiedClaims.length);
 
+  const { evidenceWeights, corroborationTiers } = verificationConfig;
   const evidenceScore = clamp(
-    (fetchedCount / Math.max(1, independent.length)) * 45 +
-    (datedCount / Math.max(1, independent.length)) * 20 +
-    (authoredCount / Math.max(1, independent.length)) * 10 +
-    (hasOfficialSource ? 20 : 0) +
-    (independent.length >= 2 ? 5 : 0)
+    (fetchedCount / Math.max(1, independent.length)) * evidenceWeights.fetched +
+    (datedCount / Math.max(1, independent.length)) * evidenceWeights.dated +
+    (authoredCount / Math.max(1, independent.length)) * evidenceWeights.authored +
+    (hasOfficialSource ? evidenceWeights.official : 0) +
+    (independent.length >= 2 ? evidenceWeights.multiSourceBonus : 0)
   );
   const sourceQualityScore = clamp(
-    independent.reduce((sum, source) => sum + (source.isOfficial ? 98 : SOURCE_QUALITY[source.sourceType] ?? 50), 0) /
-      Math.max(1, independent.length)
+    independent.reduce(
+      (sum, source) => sum + getSourceAuthority(source.sourceType, { isOfficial: source.isOfficial }),
+      0
+    ) / Math.max(1, independent.length)
   );
   const supportRatio = (supported + partial * 0.5) / claimCount;
+  const corroborationTier =
+    domains.size >= 4
+      ? corroborationTiers.fourPlusDomains
+      : domains.size === 3
+        ? corroborationTiers.threeDomains
+        : domains.size === 2
+          ? corroborationTiers.twoDomains
+          : hasOfficialSource
+            ? corroborationTiers.officialOnly
+            : corroborationTiers.single;
   const corroborationScore = clamp(
-    (domains.size >= 4 ? 92 : domains.size === 3 ? 82 : domains.size === 2 ? 68 : hasOfficialSource ? 62 : 24) *
-      (0.55 + supportRatio * 0.45)
+    corroborationTier * (corroborationTiers.base + supportRatio * corroborationTiers.supportFactor)
   );
   const contradictionScore = clamp((contradicted / claimCount) * 100);
 
@@ -464,29 +495,37 @@ function finalizeDecision({ ruleScores, adjudication, understanding, verifiedCla
     ruleScores.contradictionScore,
     clamp(adjudication.contradictionScore || 0)
   );
+  const { trustWeights, decisionThresholds, blockedContentTypes } = verificationConfig;
   const trustScore = clamp(
-    relevanceScore * 0.2 +
-    evidenceScore * 0.25 +
-    corroborationScore * 0.4 +
-    ruleScores.sourceQualityScore * 0.15 -
-    contradictionScore * 0.55
+    relevanceScore * trustWeights.relevance +
+    evidenceScore * trustWeights.evidence +
+    corroborationScore * trustWeights.corroboration +
+    ruleScores.sourceQualityScore * trustWeights.sourceQuality -
+    contradictionScore * trustWeights.contradictionPenalty
   );
   const riskFlags = [...new Set(understanding.riskFlags)];
-  const blockedType = ['tutorial', 'opinion', 'marketing', 'collection', 'search_noise'].includes(understanding.contentType);
+  const blockedType = blockedContentTypes.includes(understanding.contentType);
   const hasEvidenceGate =
     ruleScores.supportedClaimCount >= 1 &&
     (ruleScores.independentSourceCount >= 2 || ruleScores.hasOfficialSource);
   const trusted =
     understanding.directlyRelevant &&
-    relevanceScore >= 75 &&
-    trustScore >= 80 &&
-    contradictionScore < 25 &&
+    relevanceScore >= decisionThresholds.trustedRelevance &&
+    trustScore >= decisionThresholds.trustedTrust &&
+    contradictionScore < decisionThresholds.maxContradictionForTrusted &&
     hasEvidenceGate &&
     !blockedType;
   let verificationStatus = trusted ? 'trusted' : 'needs_review';
-  if (contradictionScore >= 50 || verifiedClaims.some((claim) => claim.status === 'contradicted' && claim.importance === 'core')) {
+  if (
+    contradictionScore >= decisionThresholds.contradictedScore ||
+    verifiedClaims.some((claim) => claim.status === 'contradicted' && claim.importance === 'core')
+  ) {
     verificationStatus = 'contradicted';
-  } else if (!understanding.directlyRelevant || relevanceScore < 50 || understanding.contentType === 'search_noise') {
+  } else if (
+    !understanding.directlyRelevant ||
+    relevanceScore < decisionThresholds.rejectRelevance ||
+    understanding.contentType === 'search_noise'
+  ) {
     verificationStatus = 'rejected';
   }
   if (adjudication.verificationStatus === 'contradicted') verificationStatus = 'contradicted';
@@ -527,15 +566,79 @@ function buildVerifiedSummary({ keyword, event, decision, verifiedClaims }) {
   return `此内容与【${keyword}】的关联：${relation}。当前证据不足，已进入待核验区。`.slice(0, 220);
 }
 
+function buildCandidateText(article) {
+  return `${article.title || ''} ${article.snippet || ''} ${String(article.bodyText || '').slice(0, 800)}`.trim();
+}
+
+async function rejectLowRelevanceEvent({ item, keyword, primaryArticle, semanticRelevance }) {
+  const understanding = {
+    directlyRelevant: false,
+    relevanceScore: clamp(semanticRelevance ?? 0),
+    semanticRelevance,
+    contentType: 'search_noise',
+    entities: [],
+    claims: [],
+    searchQueries: [],
+    riskFlags: ['low_semantic_relevance']
+  };
+  const event = await ensureEvent({ article: primaryArticle, keyword, understanding });
+  await upsertSourceItem({ eventId: event.id, item, article: primaryArticle });
+
+  const updated = await prisma.hotspotEvent.update({
+    where: { id: event.id },
+    data: {
+      contentType: understanding.contentType,
+      verificationStatus: 'rejected',
+      relevanceScore: understanding.relevanceScore,
+      trustScore: 0,
+      riskFlagsJson: JSON.stringify(understanding.riskFlags),
+      auditEvidenceJson: JSON.stringify({
+        reason: `语义相关性 ${understanding.relevanceScore} 低于阈值 ${verificationConfig.semantic.hardFloorRelevance}，未进入深度核验。`,
+        claims: []
+      }),
+      auditVersion: DEEP_AUDIT_VERSION,
+      verifiedAt: null
+    },
+    include: {
+      keywords: { include: { keyword: true } },
+      sourceItems: true,
+      claims: { include: { evidence: { include: { sourceItem: true } } } }
+    }
+  });
+
+  return {
+    event: updated,
+    created: event.firstSeenAt.getTime() === event.lastSeenAt.getTime(),
+    fullTextFetched: primaryArticle.fetchStatus === 'fetched',
+    corroborated: false,
+    verificationFailed: true,
+    aiCallCount: 0
+  };
+}
+
 export async function processCandidateAsEvent({ item, keyword, settings }) {
   const primaryArticle = {
     ...(await fetchArticleContent(item)),
     sourceType: item.sourceType
   };
+
+  // 语义相关性闸：明显不相关的候选在进入昂贵 LLM 链前被挡掉（降本主收益）。
+  const semanticRelevance = await semanticRelevanceScore(
+    buildReferenceText(keyword.term, settings.scope),
+    buildCandidateText(primaryArticle)
+  );
+  if (
+    semanticRelevance !== null &&
+    semanticRelevance < verificationConfig.semantic.hardFloorRelevance
+  ) {
+    return rejectLowRelevanceEvent({ item, keyword, primaryArticle, semanticRelevance });
+  }
+
   const understanding = await understandContent({
     settings,
     keyword: keyword.term,
-    article: primaryArticle
+    article: primaryArticle,
+    semanticRelevance
   });
   const event = await ensureEvent({ article: primaryArticle, keyword, understanding });
   await upsertSourceItem({ eventId: event.id, item, article: primaryArticle });
@@ -593,9 +696,10 @@ export async function processCandidateAsEvent({ item, keyword, settings }) {
     understanding,
     verifiedClaims: claimsWithImportance
   });
+  const [reviewLow, reviewHigh] = verificationConfig.decisionThresholds.independentReviewTrustRange;
   const needsIndependentReview =
     ['high', 'urgent'].includes(adjudication.importance) ||
-    (preliminary.trustScore >= 72 && preliminary.trustScore <= 88) ||
+    (preliminary.trustScore >= reviewLow && preliminary.trustScore <= reviewHigh) ||
     preliminary.contradictionScore > 0;
   let adjudicationCount = 1;
   if (needsIndependentReview) {

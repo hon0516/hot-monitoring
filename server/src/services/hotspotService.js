@@ -1,13 +1,6 @@
 import { prisma } from '../db/prisma.js';
-import { analyzeHotspot, buildHotspotSummary, expandKeyword, preMatchKeyword, sanitizeEvidenceText } from './aiService.js';
-import {
-  buildEvidencePackage,
-  finalizeAudit,
-  needsSecondReview,
-  shouldStoreAuditedCandidate,
-  shouldUseAiReview
-} from './auditService.js';
-import { dispatchEventNotifications, dispatchNotifications } from './notificationService.js';
+import { buildHotspotSummary, sanitizeEvidenceText } from './aiService.js';
+import { dispatchEventNotifications } from './notificationService.js';
 import { ensureSettings } from './settingsService.js';
 import { searchBing } from '../sources/bingSource.js';
 import { searchGoogleNews } from '../sources/googleNewsSource.js';
@@ -15,7 +8,6 @@ import { searchHackerNews } from '../sources/hackerNewsSource.js';
 import { searchTwitter } from '../sources/twitterSource.js';
 import { searchBilibili } from '../sources/bilibiliSource.js';
 import { searchSogou } from '../sources/sogouSource.js';
-import { buildDedupeFields, meetsNotificationThreshold } from '../utils/normalize.js';
 import { calculateHeatScore, getHeatLabel } from '../utils/heat.js';
 import { randomDelay, sleep } from '../utils/delay.js';
 import { socketHub } from '../ws/socketHub.js';
@@ -33,53 +25,6 @@ function getHotspotFreshnessWhere() {
   return {
     OR: [{ sourcePublishedAt: null }, { sourcePublishedAt: { gte: cutoff } }]
   };
-}
-
-async function findDuplicate({ canonicalUrl, titleNormalized }) {
-  return prisma.hotspot.findFirst({
-    where: {
-      OR: [
-        canonicalUrl ? { canonicalUrl } : undefined,
-        { titleNormalized }
-      ].filter(Boolean)
-    },
-    include: {
-      keywords: {
-        include: {
-          keyword: true
-        }
-      }
-    }
-  });
-}
-
-function parseDate(value) {
-  if (!value) {
-    return null;
-  }
-
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-async function ensureHotspotKeyword(hotspotId, keywordId) {
-  if (!keywordId) {
-    return;
-  }
-
-  await prisma.hotspotKeyword.upsert({
-    where: {
-      hotspotId_keywordId: {
-        hotspotId,
-        keywordId
-      }
-    },
-    update: {},
-    create: {
-      hotspotId,
-      keywordId
-    }
-  });
 }
 
 async function hydrateHotspot(id) {
@@ -257,89 +202,6 @@ function sanitizeHotspot(hotspot) {
 
 export async function getHotspotById(id) {
   return hydrateHotspot(id);
-}
-
-async function createHotspotRecord({ item, keyword, analysis, audit }) {
-  const { canonicalUrl, titleNormalized, dedupeKey } = buildDedupeFields(item);
-  const fallbackSummary = buildHotspotSummary({
-    value: analysis?.summary,
-    item,
-    keyword: keyword?.term || null
-  });
-  const existing = await findDuplicate({ canonicalUrl, titleNormalized });
-
-  if (existing) {
-    await ensureHotspotKeyword(existing.id, keyword?.id);
-    if (
-      (analysis || audit) &&
-      (existing.aiImportance === null ||
-        existing.aiRelevance === null ||
-        existing.aiSummary === null ||
-        existing.aiEvidence === null ||
-        existing.auditStatus === null ||
-        existing.trustScore === null)
-    ) {
-      await prisma.hotspot.update({
-        where: { id: existing.id },
-        data: {
-          aiIsReal: analysis?.isReal ?? existing.aiIsReal,
-          aiRelevance: analysis?.relevance ?? existing.aiRelevance,
-          aiImportance: analysis?.importance ?? existing.aiImportance,
-          aiSummary: fallbackSummary || existing.aiSummary,
-          aiEvidence: analysis?.evidence ?? existing.aiEvidence,
-          auditStatus: audit?.auditStatus ?? null,
-          aiConfidence: audit?.aiConfidence ?? null,
-          trustScore: audit?.trustScore ?? null,
-          sourceQualityScore: audit?.sourceQualityScore ?? null,
-          auditFlagsJson: audit?.auditFlags ? JSON.stringify(audit.auditFlags) : null,
-          auditVersion: audit?.auditVersion ?? null,
-          corroborationCount: audit?.corroborationCount ?? 0
-        }
-      });
-    }
-
-    return { hotspot: await hydrateHotspot(existing.id), created: false, pendingAnalysis: false };
-  }
-
-  const created = await prisma.hotspot.create({
-    data: {
-      title: item.title,
-      snippet: item.snippet,
-      url: item.url,
-      canonicalUrl,
-      sourceType: item.sourceType,
-      sourceAuthor: item.sourceAuthor,
-      sourcePublishedAt: parseDate(item.sourcePublishedAt),
-      engagementJson: item.engagementJson || null,
-      dedupeKey,
-      titleNormalized,
-      aiIsReal: analysis?.isReal ?? null,
-      aiRelevance: analysis?.relevance ?? null,
-      aiImportance: analysis?.importance ?? null,
-      aiSummary: fallbackSummary,
-      aiEvidence: analysis?.evidence ?? null,
-      auditStatus: audit?.auditStatus ?? null,
-      aiConfidence: audit?.aiConfidence ?? null,
-      trustScore: audit?.trustScore ?? null,
-      sourceQualityScore: audit?.sourceQualityScore ?? null,
-      auditFlagsJson: audit?.auditFlags ? JSON.stringify(audit.auditFlags) : null,
-      auditVersion: audit?.auditVersion ?? null,
-      corroborationCount: audit?.corroborationCount ?? 0,
-      keywords: keyword?.id
-        ? {
-            create: {
-              keywordId: keyword.id
-            }
-          }
-        : undefined
-    }
-  });
-
-  return {
-    hotspot: await hydrateHotspot(created.id),
-    created: true,
-    pendingAnalysis: !analysis
-  };
 }
 
 const KEYWORD_SOURCE_CONFIGS = [
@@ -626,80 +488,6 @@ async function processSourceItems({
   if (source.applyDelay) {
     await sleep(randomDelay());
   }
-}
-
-function buildRuleOnlyAnalysis({ audit, preMatch, item, keyword }) {
-  const relationSummary = buildRuleRelationSummary({ audit, preMatch, item, keyword });
-
-  return {
-    isReal: audit.auditStatus === 'trusted' || audit.auditStatus === 'needs_review',
-    relevance: audit.relevanceScore,
-    importance: audit.importance || 'low',
-    keywordMentioned: Boolean(preMatch?.matched),
-    summary: relationSummary,
-    evidence: audit.evidence.join('\n')
-  };
-}
-
-function buildRuleRelationSummary({ audit, preMatch, item, keyword }) {
-  if (!keyword) {
-    return null;
-  }
-
-  const title = String(item?.title || '').trim();
-  const contentType = audit.contentType || 'discussion';
-  const matchedTerms = Array.isArray(preMatch?.matchedTerms) ? preMatch.matchedTerms.filter(Boolean).slice(0, 2) : [];
-  const matchText = matchedTerms.length ? `命中「${matchedTerms.join('、')}」` : '命中关键词线索';
-
-  if (preMatch?.matched) {
-    if (contentType === 'event') {
-      return `此内容与【${keyword}】的关联：${matchText}，并呈现为近期事件或产品动态。`;
-    }
-
-    if (contentType === 'tutorial') {
-      return `此内容与【${keyword}】的关联：${matchText}，但更像教程或经验内容，需降低热点权重。`;
-    }
-
-    if (contentType === 'collection') {
-      return `此内容与【${keyword}】的关联：${matchText}，但更像合集或系列内容，需谨慎展示。`;
-    }
-
-    return `此内容与【${keyword}】的关联：${matchText}，主题与监控关键词直接相关。`;
-  }
-
-  if (title) {
-    return `此内容与【${keyword}】的关联：标题《${title}》来自关键词检索结果，但未直接命中关键词，相关性保守评估。`;
-  }
-
-  return `此内容与【${keyword}】的关联：来自关键词检索结果，但证据较少，相关性保守评估。`;
-}
-
-function mergeAnalysisResults(first, second, firstAudit, secondAudit) {
-  if (!second) {
-    return first;
-  }
-
-  const firstTrust = Number(firstAudit?.trustScore ?? first?.trustScore ?? 0);
-  const secondTrust = Number(secondAudit?.trustScore ?? second?.trustScore ?? 0);
-  const conservative = secondTrust < firstTrust ? second : first;
-
-  return {
-    ...conservative,
-    isReal: Boolean(first?.isReal && second?.isReal),
-    relevance: Math.round((Number(first?.relevance || 0) + Number(second?.relevance || 0)) / 2),
-    trustScore: Math.min(Number(first?.trustScore || 0), Number(second?.trustScore || 0)),
-    confidence: Math.round((Number(first?.confidence || 0) + Number(second?.confidence || 0)) / 2),
-    evidence: [first?.evidence, second?.evidence].filter(Boolean).join('\n')
-  };
-}
-
-function alignAnalysisWithAudit(analysis, audit) {
-  return {
-    ...analysis,
-    isReal: audit.auditStatus === 'trusted' || (analysis.isReal === true && audit.auditStatus === 'needs_review'),
-    relevance: audit.relevanceScore,
-    evidence: audit.evidence.join('\n')
-  };
 }
 
 function buildCollectionWarning({ createdCount, counters }) {

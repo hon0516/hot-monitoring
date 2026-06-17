@@ -47,7 +47,19 @@ export const env = {
   smtpUser: process.env.SMTP_USER || '',
   smtpPass: process.env.SMTP_PASS || '',
   smtpFrom: process.env.SMTP_FROM || '',
-  allowedOrigin: process.env.VITE_API_BASE ? new URL(process.env.VITE_API_BASE).origin : 'http://localhost:5173'
+  allowedOrigin: process.env.VITE_API_BASE ? new URL(process.env.VITE_API_BASE).origin : 'http://localhost:5173',
+  embeddingEnabled: toBoolean(process.env.EMBEDDING_ENABLED, true),
+  embeddingModel: process.env.EMBEDDING_MODEL || 'Xenova/multilingual-e5-small',
+  embeddingDtype: process.env.EMBEDDING_DTYPE || 'q8',
+  embeddingOffline: toBoolean(process.env.EMBEDDING_OFFLINE, false),
+  embeddingSimilarityRange: {
+    floor: Number.isFinite(Number.parseFloat(process.env.EMBEDDING_SIMILARITY_FLOOR))
+      ? Number.parseFloat(process.env.EMBEDDING_SIMILARITY_FLOOR)
+      : 0.78,
+    ceil: Number.isFinite(Number.parseFloat(process.env.EMBEDDING_SIMILARITY_CEIL))
+      ? Number.parseFloat(process.env.EMBEDDING_SIMILARITY_CEIL)
+      : 0.9
+  }
 };
 
 export const configState = {

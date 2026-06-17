@@ -3,6 +3,7 @@ import {
   calculateVerificationScoresForTest,
   finalizeVerificationDecisionForTest
 } from './deepVerificationService.js';
+import { verificationConfig, getSourceAuthority } from '../config/verificationConfig.js';
 
 function source(overrides = {}) {
   return {
@@ -83,5 +84,42 @@ describe('deep verification scoring', () => {
     });
 
     expect(decision.verificationStatus).toBe('contradicted');
+  });
+
+  it('keeps a blocked content type out of the trusted flow despite high scores', () => {
+    const sources = [
+      source({ publisherDomain: 'example.com' }),
+      source({ publisherDomain: 'another.org', sourceType: 'bing' })
+    ];
+    const claims = [{ statement: 'Codex 教程合集', status: 'supported', importance: 'core' }];
+    const ruleScores = calculateVerificationScoresForTest({
+      sources,
+      verifiedClaims: claims,
+      understanding: { relevanceScore: 96 }
+    });
+    const decision = finalizeVerificationDecisionForTest({
+      ruleScores,
+      adjudication: { relevanceScore: 96, evidenceScore: 95, corroborationScore: 95, contradictionScore: 0 },
+      // tutorial 属于 blockedContentTypes
+      understanding: { directlyRelevant: true, contentType: 'tutorial', riskFlags: [] },
+      verifiedClaims: claims
+    });
+
+    expect(verificationConfig.blockedContentTypes).toContain('tutorial');
+    expect(decision.verificationStatus).not.toBe('trusted');
+  });
+});
+
+describe('verificationConfig.getSourceAuthority', () => {
+  it('returns the official score when the source is official', () => {
+    expect(getSourceAuthority('sogou', { isOfficial: true })).toBe(verificationConfig.sourceAuthority.official);
+  });
+
+  it('falls back to the default score for unknown sources', () => {
+    expect(getSourceAuthority('unknown-source')).toBe(verificationConfig.sourceAuthority.default);
+  });
+
+  it('uses the per-source authority for known sources', () => {
+    expect(getSourceAuthority('google-news')).toBe(verificationConfig.sourceAuthority['google-news']);
   });
 });
