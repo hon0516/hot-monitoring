@@ -1,8 +1,14 @@
 import * as cheerio from 'cheerio';
 import { configState, env } from '../config/env.js';
 import { buildQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
-import { fetchText, isChallengePage, parseCount, safeJsonStringify, stripHtml, toIsoString } from './sourceClient.js';
+import { fetchJson, fetchText, isChallengePage, parseCount, safeJsonStringify, stripHtml, toIsoString } from './sourceClient.js';
 import { searchWeiboHot } from './weiboHotSource.js';
+
+function compactKeyword(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s`~!@#$%^&*()\-_=+\[\]{}\\|;:'",.<>/?，。！？、；：“”‘’（）【】《》—]+/g, '');
+}
 
 function resolveWeiboUrl(href) {
   if (!href) {
@@ -23,6 +29,77 @@ function resolveWeiboUrl(href) {
 function parseStatText(value) {
   const text = stripHtml(value).replace(/[^\d万亿w.]/giu, '');
   return parseCount(text);
+}
+
+function buildPublicHotSearchUrl(topicName) {
+  const keyword = String(topicName || '').trim();
+  if (!keyword) {
+    return 'https://s.weibo.com/top/summary?cate=realtimehot';
+  }
+
+  return `https://s.weibo.com/weibo?q=${encodeURIComponent(`#${keyword}#`)}`;
+}
+
+function createKeywordMatcher(query) {
+  const queryText = String(query || '').trim();
+  const compactQuery = compactKeyword(queryText);
+  const tokens = queryText
+    .toLowerCase()
+    .split(/[\s/,+|]+/u)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2);
+  const compactTokens = tokens.map((item) => compactKeyword(item)).filter(Boolean);
+
+  if (!compactQuery && !tokens.length) {
+    return () => true;
+  }
+
+  return (candidate) => {
+    const raw = String(candidate || '').trim().toLowerCase();
+    const compactRaw = compactKeyword(raw);
+
+    if (compactQuery && compactRaw.includes(compactQuery)) {
+      return true;
+    }
+
+    if (compactTokens.length > 1) {
+      return compactTokens.every((token) => compactRaw.includes(token));
+    }
+
+    return tokens.some((token) => raw.includes(token)) || compactTokens.some((token) => compactRaw.includes(token));
+  };
+}
+
+export function parseWeiboPublicHotResponse(payload, query) {
+  const items = Array.isArray(payload?.data?.realtime) ? payload.data.realtime : [];
+  if (!items.length) {
+    return [];
+  }
+
+  const matchesQuery = createKeywordMatcher(query);
+
+  return items
+    .filter((item) => matchesQuery(item?.note || item?.word || ''))
+    .map((item) => {
+      const topicName = stripHtml(item?.note || item?.word || '').trim();
+      if (!topicName) {
+        return null;
+      }
+
+      return {
+        title: `微博热搜：${topicName}`,
+        snippet: `微博热搜话题「${topicName}」，热度 ${Number(item?.num || 0).toLocaleString('zh-CN') || '未知'}`,
+        url: buildPublicHotSearchUrl(topicName),
+        sourceType: 'weibo',
+        sourceAuthor: '微博热搜',
+        sourcePublishedAt: new Date().toISOString(),
+        engagementJson: safeJsonStringify({
+          views: parseCount(item?.num ?? 0) || 0,
+          hot: parseCount(item?.num ?? 0) || 0
+        })
+      };
+    })
+    .filter(Boolean);
 }
 
 export function parseWeiboRealtimePage(html) {
@@ -89,6 +166,20 @@ async function searchWeiboRealtimePage(query) {
   return parseWeiboRealtimePage(html);
 }
 
+async function searchWeiboPublicHot(query) {
+  const payload = await fetchJson('https://weibo.com/ajax/side/hotSearch', {
+    headers: {
+      Referer: 'https://weibo.com/'
+    }
+  });
+
+  if (payload?.ok !== 1 || !payload?.data?.realtime) {
+    return [];
+  }
+
+  return parseWeiboPublicHotResponse(payload, query);
+}
+
 export async function searchWeibo({ keyword, scope }) {
   const queryVariants = buildQueryVariants({ keyword, scope });
   if (!queryVariants.length) {
@@ -98,6 +189,16 @@ export async function searchWeibo({ keyword, scope }) {
   const results = [];
 
   for (const query of queryVariants) {
+    try {
+      const publicHotResults = await searchWeiboPublicHot(query);
+      results.push(...publicHotResults);
+      if (results.length >= 10) {
+        break;
+      }
+    } catch (error) {
+      console.warn(`[weibo] 公开热搜接口失败: ${error.message}`);
+    }
+
     try {
       const realtimeResults = await searchWeiboRealtimePage(query);
       results.push(...realtimeResults);

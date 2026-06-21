@@ -2,26 +2,15 @@ import crypto from 'node:crypto';
 import * as cheerio from 'cheerio';
 import { normalizeUrl } from '../utils/normalize.js';
 import { stripHtml } from '../sources/sourceClient.js';
+import { assessSourceAuthority, matchOfficialSource } from '../config/verificationConfig.js';
 
 const MAX_BODY_CHARS = 18000;
 const MIN_BODY_CHARS = 180;
 const BLOCKED_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
-const OFFICIAL_DOMAINS = [
-  'openai.com',
-  'anthropic.com',
-  'google.com',
-  'deepmind.google',
-  'microsoft.com',
-  'github.com',
-  'apple.com',
-  'meta.com',
-  'nvidia.com',
-  'huggingface.co',
-  'cloud.tencent.com',
-  'alibabacloud.com'
-];
 const AGGREGATOR_DOMAINS = new Set(['news.google.com', 'bing.com', 'www.bing.com']);
 const GENERIC_PAGE_TITLES = new Set(['google news', 'msn', 'bing', 'microsoft start']);
+const METADATA_FALLBACK_SOURCES = new Set(['twitter', 'weibo', 'weibo-hot', 'bilibili', 'hacker-news']);
+const TWITTER_DOMAINS = new Set(['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com']);
 
 function isPrivateIpv4(hostname) {
   return /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/u.test(hostname);
@@ -123,7 +112,37 @@ export function getPublisherDomain(value) {
 
 export function isOfficialDomain(domain) {
   if (AGGREGATOR_DOMAINS.has(domain)) return false;
-  return OFFICIAL_DOMAINS.some((item) => domain === item || domain.endsWith(`.${item}`));
+  return matchOfficialSource({ domain }).isOfficial;
+}
+
+function metadataBody(item) {
+  const text = stripHtml([item?.snippet, item?.title].filter(Boolean).join(' '));
+  return text.length >= 40 ? text.slice(0, MAX_BODY_CHARS) : '';
+}
+
+function isTwitterSource(item, domain) {
+  return item?.sourceType === 'twitter' || TWITTER_DOMAINS.has(String(domain || '').toLowerCase());
+}
+
+function isTwitterPageTitle(value) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return normalized.endsWith(' on x') || normalized.endsWith(' / x');
+}
+
+function authorityFor({ item, publisherDomain, url, isOfficial, officialEntity, fetchStatus }) {
+  const authority = assessSourceAuthority({
+    sourceType: item?.sourceType,
+    publisherDomain,
+    canonicalUrl: url,
+    resolvedUrl: url,
+    isOfficial,
+    officialEntity,
+    fetchStatus
+  });
+  return {
+    sourceAuthorityScore: authority.score,
+    authorityReason: authority.reason
+  };
 }
 
 export async function fetchArticleContent(item, { timeoutMs = 15000 } = {}) {
@@ -154,6 +173,8 @@ export async function fetchArticleContent(item, { timeoutMs = 15000 } = {}) {
     const resolvedUrl = response.url || item.url;
     const resolvedDomain = getPublisherDomain(resolvedUrl);
     if (AGGREGATOR_DOMAINS.has(resolvedDomain)) {
+      const fetchStatus = 'metadata_only';
+      const official = { isOfficial: false, officialEntity: null };
       return {
         title: item.title,
         snippet: item.snippet || '',
@@ -166,9 +187,18 @@ export async function fetchArticleContent(item, { timeoutMs = 15000 } = {}) {
         publisherName: item.sourceAuthor || '',
         sourceAuthor: item.sourceAuthor || '',
         sourcePublishedAt: item.sourcePublishedAt || null,
-        fetchStatus: 'metadata_only',
+        fetchStatus,
         fetchError: '聚合链接未解析到原始媒体地址',
-        isOfficial: false,
+        isOfficial: official.isOfficial,
+        officialEntity: official.officialEntity,
+        ...authorityFor({
+          item,
+          publisherDomain: null,
+          url: item.url,
+          isOfficial: official.isOfficial,
+          officialEntity: official.officialEntity,
+          fetchStatus
+        }),
         evidenceFlags: ['aggregator_url_unresolved', 'body_unavailable']
       };
     }
@@ -177,14 +207,19 @@ export async function fetchArticleContent(item, { timeoutMs = 15000 } = {}) {
     const extractedTitle =
       metaContent($, ['meta[property="og:title"]', 'meta[name="twitter:title"]', 'h1', 'title']) ||
       item.title;
-    const title = GENERIC_PAGE_TITLES.has(String(extractedTitle || '').trim().toLowerCase())
-      ? item.title
-      : extractedTitle;
-    const snippet =
+    const sourceIsTwitter = isTwitterSource(item, resolvedDomain);
+    const title =
+      sourceIsTwitter || GENERIC_PAGE_TITLES.has(String(extractedTitle || '').trim().toLowerCase()) || isTwitterPageTitle(extractedTitle)
+        ? item.title
+        : extractedTitle;
+    const extractedSnippet =
       metaContent($, ['meta[property="og:description"]', 'meta[name="description"]', 'meta[name="twitter:description"]']) ||
       item.snippet ||
       '';
-    const author = metaContent($, ['meta[name="author"]', '[rel="author"]', '[itemprop="author"]']) || item.sourceAuthor || '';
+    const snippet = sourceIsTwitter ? item.snippet || extractedSnippet : extractedSnippet;
+    const author = sourceIsTwitter
+      ? item.sourceAuthor || ''
+      : metaContent($, ['meta[name="author"]', '[rel="author"]', '[itemprop="author"]']) || item.sourceAuthor || '';
     const publishedAt =
       metaContent($, [
         'meta[property="article:published_time"]',
@@ -192,10 +227,17 @@ export async function fetchArticleContent(item, { timeoutMs = 15000 } = {}) {
         'meta[name="pubdate"]',
         'time[datetime]'
       ]) || item.sourcePublishedAt || null;
-    const publisherName =
-      metaContent($, ['meta[property="og:site_name"]', 'meta[name="application-name"]']) || item.sourceAuthor || '';
-    const bodyText = extractArticleText($);
+    const publisherName = sourceIsTwitter
+      ? 'X'
+      : metaContent($, ['meta[property="og:site_name"]', 'meta[name="application-name"]']) || item.sourceAuthor || '';
+    const extractedBodyText = extractArticleText($);
+    const bodyText = sourceIsTwitter ? extractedBodyText || metadataBody(item) : extractedBodyText;
     const publisherDomain = resolvedDomain;
+    const official = matchOfficialSource({
+      domain: publisherDomain,
+      url: resolvedUrl
+    });
+    const fetchStatus = bodyText ? 'fetched' : 'metadata_only';
     const evidenceFlags = [];
     if (!bodyText) evidenceFlags.push('body_unavailable');
     if (!publishedAt) evidenceFlags.push('published_at_missing');
@@ -213,18 +255,31 @@ export async function fetchArticleContent(item, { timeoutMs = 15000 } = {}) {
       publisherName,
       sourceAuthor: author,
       sourcePublishedAt: publishedAt,
-      fetchStatus: bodyText ? 'fetched' : 'metadata_only',
+      fetchStatus,
       fetchError: null,
-      isOfficial: isOfficialDomain(publisherDomain),
+      isOfficial: official.isOfficial,
+      officialEntity: official.officialEntity,
+      ...authorityFor({
+        item,
+        publisherDomain,
+        url: resolvedUrl,
+        isOfficial: official.isOfficial,
+        officialEntity: official.officialEntity,
+        fetchStatus
+      }),
       evidenceFlags
     };
   } catch (error) {
     const publisherDomain = getPublisherDomain(item.url);
+    const official = matchOfficialSource({ domain: publisherDomain, url: item.url });
+    const fallbackBody = METADATA_FALLBACK_SOURCES.has(item.sourceType) ? metadataBody(item) : '';
+    const fetchStatus = fallbackBody ? 'metadata_only' : 'failed';
+    const bodyHash = fallbackBody ? crypto.createHash('sha256').update(fallbackBody).digest('hex') : null;
     return {
       title: item.title,
       snippet: item.snippet || '',
-      bodyText: '',
-      bodyHash: null,
+      bodyText: fallbackBody,
+      bodyHash,
       originalUrl: item.url,
       canonicalUrl: normalizeUrl(item.url),
       resolvedUrl: item.url,
@@ -232,10 +287,23 @@ export async function fetchArticleContent(item, { timeoutMs = 15000 } = {}) {
       publisherName: item.sourceAuthor || '',
       sourceAuthor: item.sourceAuthor || '',
       sourcePublishedAt: item.sourcePublishedAt || null,
-      fetchStatus: 'failed',
+      fetchStatus,
       fetchError: error?.name === 'AbortError' ? '原文请求超时' : error.message,
-      isOfficial: isOfficialDomain(publisherDomain),
-      evidenceFlags: ['body_unavailable', ...(!item.sourcePublishedAt ? ['published_at_missing'] : [])]
+      isOfficial: official.isOfficial,
+      officialEntity: official.officialEntity,
+      ...authorityFor({
+        item,
+        publisherDomain,
+        url: item.url,
+        isOfficial: official.isOfficial,
+        officialEntity: official.officialEntity,
+        fetchStatus
+      }),
+      evidenceFlags: [
+        'body_unavailable',
+        ...(fallbackBody ? ['metadata_fallback'] : []),
+        ...(!item.sourcePublishedAt ? ['published_at_missing'] : [])
+      ]
     };
   } finally {
     clearTimeout(timeoutId);

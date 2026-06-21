@@ -51,26 +51,183 @@ export const verificationConfig = {
     supportFactor: 0.45
   },
 
-  // 来源权威度（替代写死的 SOURCE_QUALITY）。信任度仍以「独立来源 + 官方一手 + 事实支持」为主导，
-  // 该表仅作来源质量分的兜底权重。
-  sourceAuthority: {
-    'google-news': 82,
-    bing: 78,
-    'hacker-news': 74,
-    twitter: 52,
-    bilibili: 45,
-    sogou: 35,
-    default: 50,
+  // 发现渠道只用于兜底，不能代表发布者权威。
+  discoverySourceAuthority: {
+    'google-news': 52,
+    bing: 50,
+    'hacker-news': 60,
+    twitter: 38,
+    bilibili: 36,
+    weibo: 34,
+    'weibo-hot': 28,
+    sogou: 32,
+    default: 42,
     official: 98
   },
+  // 兼容旧测试和旧调用点；新逻辑优先使用 discoverySourceAuthority + domainAuthority。
+  sourceAuthority: {
+    'google-news': 52,
+    bing: 50,
+    'hacker-news': 60,
+    twitter: 38,
+    bilibili: 36,
+    weibo: 34,
+    'weibo-hot': 28,
+    sogou: 32,
+    default: 42,
+    official: 98
+  },
+
+  // 发布域名权威度。未列出的域名走发现渠道兜底，并受正文可用性惩罚。
+  domainAuthority: {
+    'openai.com': 92,
+    'anthropic.com': 92,
+    'deepmind.google': 90,
+    'googleblog.com': 88,
+    'microsoft.com': 88,
+    'apple.com': 88,
+    'meta.com': 86,
+    'nvidia.com': 86,
+    'huggingface.co': 82,
+    'github.blog': 78,
+    'reuters.com': 88,
+    'apnews.com': 88,
+    'bloomberg.com': 84,
+    'theverge.com': 76,
+    'techcrunch.com': 74,
+    '36kr.com': 70,
+    'caixin.com': 80,
+    'cloud.tencent.com': 82,
+    'alibabacloud.com': 82
+  },
+
+  // 官方来源必须匹配实体规则；平台型域名不能只凭域名算官方。
+  officialEntities: [
+    { entity: 'OpenAI', domains: ['openai.com'], githubOrgs: ['openai'] },
+    { entity: 'Anthropic', domains: ['anthropic.com'], githubOrgs: ['anthropics'] },
+    { entity: 'Google DeepMind', domains: ['deepmind.google', 'googleblog.com'], githubOrgs: ['google-deepmind'] },
+    { entity: 'Microsoft', domains: ['microsoft.com'], githubOrgs: ['microsoft'] },
+    { entity: 'Apple', domains: ['apple.com'], githubOrgs: ['apple'] },
+    { entity: 'Meta', domains: ['meta.com'], githubOrgs: ['facebookresearch', 'meta-llama'] },
+    { entity: 'NVIDIA', domains: ['nvidia.com'], githubOrgs: ['nvidia'] },
+    { entity: 'Hugging Face', domains: ['huggingface.co'], githubOrgs: ['huggingface'] },
+    { entity: '腾讯云', domains: ['cloud.tencent.com'] },
+    { entity: '阿里云', domains: ['alibabacloud.com'] }
+  ],
 
   // 不作为可信热点直接通过的内容类型。
   blockedContentTypes: ['tutorial', 'opinion', 'marketing', 'collection', 'search_noise']
 };
 
-export function getSourceAuthority(sourceType, { isOfficial = false } = {}) {
-  if (isOfficial) {
-    return verificationConfig.sourceAuthority.official;
+function clampScore(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(100, Math.max(0, Math.round(number))) : 0;
+}
+
+function normalizeDomain(value) {
+  return String(value || '').replace(/^www\./iu, '').toLowerCase();
+}
+
+function hostnameFromUrl(value) {
+  try {
+    return normalizeDomain(new URL(value).hostname);
+  } catch {
+    return '';
   }
-  return verificationConfig.sourceAuthority[sourceType] ?? verificationConfig.sourceAuthority.default;
+}
+
+function pathFromUrl(value) {
+  try {
+    return new URL(value).pathname;
+  } catch {
+    return '';
+  }
+}
+
+function domainMatches(domain, candidate) {
+  const normalizedDomain = normalizeDomain(domain);
+  const normalizedCandidate = normalizeDomain(candidate);
+  return normalizedDomain === normalizedCandidate || normalizedDomain.endsWith(`.${normalizedCandidate}`);
+}
+
+function domainAuthorityScore(domain) {
+  const normalizedDomain = normalizeDomain(domain);
+  for (const [candidate, score] of Object.entries(verificationConfig.domainAuthority)) {
+    if (domainMatches(normalizedDomain, candidate)) {
+      return score;
+    }
+  }
+  return undefined;
+}
+
+export function matchOfficialSource({ domain, url, entities = [] } = {}) {
+  const host = normalizeDomain(domain) || hostnameFromUrl(url);
+  const pathname = pathFromUrl(url);
+  const entityHints = new Set(entities.map((item) => String(item || '').toLowerCase()).filter(Boolean));
+
+  for (const rule of verificationConfig.officialEntities) {
+    const entityName = String(rule.entity || '');
+    const entityMatchesHint =
+      !entityHints.size ||
+      entityHints.has(entityName.toLowerCase()) ||
+      [...entityHints].some((hint) => entityName.toLowerCase().includes(hint) || hint.includes(entityName.toLowerCase()));
+
+    if (!entityMatchesHint) {
+      continue;
+    }
+
+    if (rule.domains?.some((candidate) => domainMatches(host, candidate))) {
+      return { isOfficial: true, officialEntity: entityName, reason: `匹配官方域名 ${host}` };
+    }
+
+    if (host === 'github.com' && Array.isArray(rule.githubOrgs)) {
+      const org = pathname.split('/').filter(Boolean)[0]?.toLowerCase();
+      if (org && rule.githubOrgs.map((item) => item.toLowerCase()).includes(org)) {
+        return { isOfficial: true, officialEntity: entityName, reason: `匹配官方 GitHub 组织 ${org}` };
+      }
+    }
+  }
+
+  return { isOfficial: false, officialEntity: null, reason: host ? `未匹配官方实体规则: ${host}` : '缺少发布域名' };
+}
+
+export function assessSourceAuthority({
+  sourceType,
+  publisherDomain,
+  canonicalUrl,
+  resolvedUrl,
+  isOfficial = false,
+  officialEntity = null,
+  fetchStatus = 'metadata_only',
+  feedbackPenalty = 0
+} = {}) {
+  const domain = normalizeDomain(publisherDomain) || hostnameFromUrl(resolvedUrl) || hostnameFromUrl(canonicalUrl);
+  const domainScore = domainAuthorityScore(domain);
+  const fallbackScore =
+    verificationConfig.discoverySourceAuthority[sourceType] ?? verificationConfig.discoverySourceAuthority.default;
+  const baseScore = isOfficial ? verificationConfig.discoverySourceAuthority.official : domainScore ?? fallbackScore;
+  const bodyPenalty = fetchStatus === 'fetched' ? 0 : fetchStatus === 'metadata_only' ? 8 : 16;
+  const score = clampScore(baseScore - bodyPenalty - Number(feedbackPenalty || 0));
+  const reason = isOfficial
+    ? `官方来源${officialEntity ? `：${officialEntity}` : ''}`
+    : domainScore !== undefined
+      ? `发布域名权威分：${domain}`
+      : `发现渠道兜底分：${sourceType || 'unknown'}`;
+
+  return { score, reason, domain };
+}
+
+export function getSourceAuthority(sourceTypeOrSource, options = {}) {
+  if (typeof sourceTypeOrSource === 'object' && sourceTypeOrSource !== null) {
+    return assessSourceAuthority(sourceTypeOrSource).score;
+  }
+
+  if (options.isOfficial) {
+    return verificationConfig.discoverySourceAuthority.official;
+  }
+
+  return (
+    verificationConfig.discoverySourceAuthority[sourceTypeOrSource] ??
+    verificationConfig.discoverySourceAuthority.default
+  );
 }

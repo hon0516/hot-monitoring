@@ -1,5 +1,5 @@
 import { prisma } from '../db/prisma.js';
-import { buildHotspotSummary, sanitizeEvidenceText } from './aiService.js';
+import { analyzeContent, buildHotspotSummary, preMatchKeyword, sanitizeEvidenceText } from './aiService.js';
 import { dispatchEventNotifications } from './notificationService.js';
 import { ensureSettings } from './settingsService.js';
 import { searchBing } from '../sources/bingSource.js';
@@ -8,19 +8,42 @@ import { searchHackerNews } from '../sources/hackerNewsSource.js';
 import { searchTwitter } from '../sources/twitterSource.js';
 import { searchBilibili } from '../sources/bilibiliSource.js';
 import { searchSogou } from '../sources/sogouSource.js';
+import { searchWeibo } from '../sources/weiboSource.js';
 import { calculateHeatScore, getHeatLabel } from '../utils/heat.js';
 import { randomDelay, sleep } from '../utils/delay.js';
 import { socketHub } from '../ws/socketHub.js';
 import { env } from '../config/env.js';
-import { processCandidateAsEvent, projectEvent } from './deepVerificationService.js';
+import { projectEvent } from './deepVerificationService.js';
+import { calculateRelevanceDecision, processCandidateByRelevance } from './lightweightEventService.js';
+import { expansionListForKeyword, resolveKeywordExpansions } from './keywordExpansionService.js';
 import { recordSourceHealth } from './sourceHealthService.js';
 import { replaceLatestScanInbox } from './latestScanInboxService.js';
 
-const HOTSPOT_MAX_AGE_DAYS = 30;
 const HIDDEN_SOURCE_TYPES = new Set(['weibo', 'weibo-hot']);
+const TWITTER_ANALYSIS_QUOTA = 15;
+const OTHER_ANALYSIS_QUOTA = 10;
+const SOURCE_PRIORITY = {
+  twitter: 1,
+  weibo: 2,
+  bilibili: 3,
+  hackernews: 4,
+  'hacker-news': 4,
+  sogou: 5,
+  bing: 6,
+  google: 7,
+  'google-news': 7,
+  duckduckgo: 8
+};
+
+function analysisQuotaLimit(limit) {
+  return Math.min(
+    Number.isFinite(Number(limit)) ? Number(limit) : TWITTER_ANALYSIS_QUOTA + OTHER_ANALYSIS_QUOTA,
+    TWITTER_ANALYSIS_QUOTA + OTHER_ANALYSIS_QUOTA
+  );
+}
 
 function getHotspotFreshnessWhere() {
-  const cutoff = new Date(Date.now() - HOTSPOT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
+  const cutoff = new Date(Date.now() - env.hotspotMaxAgeDays * 24 * 60 * 60 * 1000);
 
   return {
     OR: [{ sourcePublishedAt: null }, { sourcePublishedAt: { gte: cutoff } }]
@@ -210,6 +233,7 @@ const KEYWORD_SOURCE_CONFIGS = [
   { name: 'hacker-news', runner: searchHackerNews, applyDelay: false, enabledKey: 'hackerNewsSourceEnabled' },
   { name: 'twitter', runner: searchTwitter, applyDelay: false, enabledKey: 'twitterSourceEnabled' },
   { name: 'bilibili', runner: searchBilibili, applyDelay: false, enabledKey: 'bilibiliSourceEnabled' },
+  { name: 'weibo', runner: searchWeibo, applyDelay: false, enabledKey: 'weiboSourceEnabled' },
   { name: 'sogou', runner: searchSogou, applyDelay: false, enabledKey: 'sogouSourceEnabled' }
 ];
 
@@ -226,7 +250,8 @@ let collectionStatus = {
   message: '',
   warning: '',
   error: null,
-  result: null
+  result: null,
+  progress: null
 };
 
 function setCollectionStatus(patch) {
@@ -234,6 +259,21 @@ function setCollectionStatus(patch) {
     ...collectionStatus,
     ...patch
   };
+}
+
+function setCollectionProgress(patch) {
+  if (collectionStatus.state !== 'running') return;
+  const progress = {
+    ...(collectionStatus.progress || {}),
+    ...patch,
+    updatedAt: new Date().toISOString()
+  };
+  setCollectionStatus({
+    progress,
+    message: progress.totalToProcess
+      ? `后台扫描进行中：已完成 ${progress.completedCount || 0}/${progress.totalToProcess}`
+      : collectionStatus.message
+  });
 }
 
 export function getCollectionStatus() {
@@ -268,7 +308,24 @@ export function triggerCollection({ trigger = 'manual' } = {}) {
     message: trigger === 'manual' ? '已开始后台扫描' : '后台定时扫描进行中',
     warning: '',
     error: null,
-    result: null
+    result: null,
+    progress: {
+      phase: 'starting',
+      mode: trigger === 'manual' ? 'quick' : 'deep',
+      collectedCount: 0,
+      candidateCount: 0,
+      analysisLimit: 0,
+      totalToProcess: 0,
+      startedCount: 0,
+      completedCount: 0,
+      acceptedCount: 0,
+      rejectedCount: 0,
+      remainingCount: 0,
+      activeCount: 0,
+      keywordExpansions: [],
+      currentItems: [],
+      updatedAt: startedAt
+    }
   });
 
   activeCollectionPromise = (async () => {
@@ -291,13 +348,28 @@ export function triggerCollection({ trigger = 'manual' } = {}) {
         message,
         warning,
         error: null,
+        progress: {
+          ...(collectionStatus.progress || {}),
+          phase: 'completed',
+          completedCount: result.processedCount,
+          remainingCount: 0,
+          activeCount: 0,
+          currentItems: [],
+          updatedAt: finishedAt
+        },
         result: {
           trigger: result.trigger,
           aiProvider: result.aiProvider,
+          analysisMode: result.analysisMode,
+          analysisLimit: result.analysisLimit,
+          analysisConcurrency: result.analysisConcurrency,
+          candidateCount: result.candidateCount,
           createdCount: result.createdCount,
           duplicateCount: result.duplicateCount,
           skippedCount: result.skippedCount,
           processedCount: result.processedCount,
+          acceptedCount: result.acceptedCount,
+          rejectedCount: result.rejectedCount,
           analysisErrorCount: result.analysisErrorCount,
           pendingAnalysisCount: result.pendingAnalysisCount,
           hitAnalysisLimit: result.hitAnalysisLimit,
@@ -313,7 +385,9 @@ export function triggerCollection({ trigger = 'manual' } = {}) {
           createdEventCount: result.createdEventCount,
           updatedEventCount: result.updatedEventCount,
           latestScanCount: latestScanInbox.total,
-          sourceStats: result.sourceStats
+          keywordExpansions: result.keywordExpansions,
+          sourceStats: result.sourceStats,
+          sourceMetrics: result.sourceMetrics
         }
       });
 
@@ -325,6 +399,13 @@ export function triggerCollection({ trigger = 'manual' } = {}) {
         message: '后台扫描失败',
         warning: '',
         error: error.message || '未知错误',
+        progress: {
+          ...(collectionStatus.progress || {}),
+          phase: 'failed',
+          activeCount: 0,
+          currentItems: [],
+          updatedAt: new Date().toISOString()
+        },
         result: null
       });
       throw error;
@@ -352,6 +433,15 @@ function getEnabledKeywordSources(settings) {
   return KEYWORD_SOURCE_CONFIGS.filter((source) => settings[source.enabledKey] !== false);
 }
 
+function getScanBudget(trigger) {
+  const quick = trigger === 'manual';
+  return {
+    mode: quick ? 'quick' : 'deep',
+    maxItems: quick ? env.aiAnalysisManualMaxItemsPerRun : env.aiAnalysisMaxItemsPerRun,
+    concurrency: quick ? env.aiAnalysisManualConcurrency : env.aiAnalysisConcurrency
+  };
+}
+
 function buildSearchResultId(item, fallbackIndex) {
   const canonicalSource = String(item.url || item.title || fallbackIndex || 'search')
     .trim()
@@ -359,6 +449,122 @@ function buildSearchResultId(item, fallbackIndex) {
     .replace(/\s+/g, '-');
 
   return `${item.sourceType || 'search'}:${canonicalSource}`;
+}
+
+function createSourceMetric(name) {
+  return {
+    sourceType: name,
+    startedAt: new Date(),
+    collected: 0,
+    processed: 0,
+    trusted: 0,
+    failed: 0,
+    filtered: 0,
+    bodyUnavailable: 0,
+    error: null
+  };
+}
+
+function metricFor(metrics, name) {
+  if (!metrics[name]) {
+    metrics[name] = createSourceMetric(name);
+  }
+  return metrics[name];
+}
+
+function candidateDedupeKey(entry) {
+  return [
+    entry.keyword?.id || 'hot',
+    entry.item?.url || '',
+    entry.item?.title || ''
+  ].join('::').toLowerCase();
+}
+
+function candidatePriority(entry) {
+  const item = entry?.item || {};
+  const sourceType = item.sourceType || entry?.source?.name || '';
+  return SOURCE_PRIORITY[sourceType] || 99;
+}
+
+function prioritizeCandidateEntries(left, right) {
+  const priorityDiff = candidatePriority(left) - candidatePriority(right);
+  if (priorityDiff !== 0) {
+    return priorityDiff;
+  }
+
+  return compareSearchItems(left.item, right.item);
+}
+
+export function selectEntriesForAnalysis(entries, limit, mode) {
+  const selected = [];
+  let twitterProcessed = 0;
+  let otherProcessed = 0;
+  const totalLimit = analysisQuotaLimit(limit);
+
+  for (const entry of entries) {
+    const sourceType = entry.item?.sourceType || entry.source?.name || '';
+    if (sourceType === 'twitter') {
+      if (twitterProcessed >= TWITTER_ANALYSIS_QUOTA) continue;
+      twitterProcessed += 1;
+    } else {
+      if (otherProcessed >= OTHER_ANALYSIS_QUOTA) continue;
+      otherProcessed += 1;
+    }
+
+    selected.push(entry);
+    if (selected.length >= totalLimit) {
+      break;
+    }
+  }
+
+  return selected;
+}
+
+function compactProgressItem({ source, keyword, item }) {
+  return {
+    title: String(item?.title || '').slice(0, 120),
+    sourceType: item?.sourceType || source?.name || '',
+    keyword: keyword?.term || ''
+  };
+}
+
+async function collectSourceCandidates({ source, settings, keyword = null, expandedKeywords = [], sourceStats, sourceMetrics }) {
+  const metric = metricFor(sourceMetrics, source.name);
+  try {
+    const rawItems = await source.runner({
+      keyword: keyword?.term || null,
+      scope: settings.scope
+    });
+    const sourceItems = Array.isArray(rawItems) ? rawItems : [];
+    metric.collected += sourceItems.length;
+    for (const item of sourceItems) {
+      sourceStats[item.sourceType || source.name] = (sourceStats[item.sourceType || source.name] || 0) + 1;
+    }
+    if (source.applyDelay) {
+      await sleep(randomDelay());
+    }
+    return sourceItems
+      .filter((item) => item?.title && item?.url && keyword?.id)
+      .map((item) => ({ source, keyword, expandedKeywords, item }));
+  } catch (error) {
+    metric.error ||= error;
+    console.error(`[collection:${source.name}]`, error.message);
+    if (source.applyDelay) {
+      await sleep(randomDelay());
+    }
+    return [];
+  }
+}
+
+async function runLimited(entries, limit, worker) {
+  const queue = [...entries];
+  const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    while (queue.length) {
+      const entry = queue.shift();
+      await worker(entry);
+    }
+  });
+  await Promise.all(workers);
 }
 
 function compareSearchItems(left, right) {
@@ -395,6 +601,10 @@ function normalizeSearchResultItem({ item, query, fallbackIndex }) {
         ]
       : []
   };
+}
+
+function buildSearchPreMatch(text, expandedKeywords) {
+  return preMatchKeyword(text, expandedKeywords);
 }
 
 async function processSourceItems({
@@ -443,15 +653,19 @@ async function processSourceItems({
     }
 
     try {
-      const result = await processCandidateAsEvent({
+      const result = await processCandidateByRelevance({
         item,
         keyword,
-        settings
+        settings,
+        expandedKeywords: expansionListForKeyword(keyword.term, [])
       });
       const projected = projectEvent(result.event);
-      counters.aiReviewedCount += result.aiCallCount || 3;
+      counters.aiReviewedCount += result.aiCallCount || 0;
+      if (result.aiFailed) {
+        counters.analysisErrorCount += 1;
+        counters.analysisErrorMessage ||= result.aiError || 'AI 分析失败';
+      }
       if (result.fullTextFetched) counters.fullTextFetchedCount += 1;
-      if (result.corroborated) counters.corroboratedCount += 1;
       if (result.verificationFailed) counters.verificationFailedCount += 1;
       if (result.event.verificationStatus === 'trusted') counters.trustedCount += 1;
       if (result.created) counters.createdEventCount += 1;
@@ -474,7 +688,7 @@ async function processSourceItems({
       counters.analysisErrorMessage ||= error.message;
       counters.verificationFailedCount += 1;
       counters.skippedCount += 1;
-      console.error('[deep-verification] 热点深度核验失败', error.message);
+      console.error('[relevance-filter] 热点相关度处理失败', error.message);
     }
   }
 
@@ -496,18 +710,18 @@ function buildCollectionWarning({ createdCount, counters }) {
   if (counters.analysisErrorCount) {
     const reason = counters.analysisErrorMessage || 'AI 分析服务异常';
     if (!createdCount && counters.processedCount > 0) {
-      warnings.push(`本轮已抓取 ${counters.processedCount} 条候选内容，但 AI 分析不可用（${reason}），因此结果均以待复核状态保存。`);
-    } else {
-      warnings.push(`本轮有 ${counters.analysisErrorCount} 条候选内容在 AI 分析阶段失败（${reason}），已按待复核状态保存。`);
+        warnings.push(`本轮已抓取 ${counters.processedCount} 条候选内容，但相关度处理异常（${reason}），部分结果未展示。`);
+      } else {
+      warnings.push(`本轮有 ${counters.analysisErrorCount} 条候选内容在相关度处理阶段失败（${reason}），已跳过展示。`);
     }
   }
 
   if (counters.hitAnalysisLimit) {
-    warnings.push(`为避免长时间等待，本轮最多处理 ${env.aiAnalysisMaxItemsPerRun} 条候选内容。`);
+    warnings.push(`为避免长时间等待，本轮每个关键词最多处理 ${counters.analysisLimit || env.aiAnalysisMaxItemsPerRun} 条候选内容。`);
   }
 
   if (counters.skipAiForCurrentRun) {
-    warnings.push('本轮 AI 连续失败已触发熔断，剩余候选按待复核状态保存。');
+    warnings.push('本轮相关度处理连续失败已触发熔断，剩余候选已跳过展示。');
   }
 
   return warnings.join(' ');
@@ -516,6 +730,14 @@ function buildCollectionWarning({ createdCount, counters }) {
 export async function runCollection({ trigger = 'manual' } = {}) {
   const settings = await ensureSettings();
   const aiProvider = settings.aiProvider || 'openrouter';
+  const scanBudget = getScanBudget(trigger);
+  const analysisLimit = analysisQuotaLimit(scanBudget.maxItems);
+  setCollectionProgress({
+    phase: 'loading',
+    mode: scanBudget.mode,
+    analysisLimit,
+    concurrency: scanBudget.concurrency
+  });
   const keywords = await prisma.keyword.findMany({
     where: {
       enabled: true
@@ -524,10 +746,16 @@ export async function runCollection({ trigger = 'manual' } = {}) {
       createdAt: 'asc'
     }
   });
+  const keywordExpansions = await resolveKeywordExpansions({ keywords, settings });
+  const keywordExpansionMap = new Map(keywordExpansions.map((item) => [String(item.keyword).toLowerCase(), item.expandedKeywords]));
+  setCollectionProgress({
+    keywordExpansions
+  });
 
   const keywordSources = getEnabledKeywordSources(settings);
   const hotSources = HOT_SOURCE_CONFIGS.filter((source) => settings[source.enabledKey] !== false);
   const createdItems = [];
+  const sourceMetrics = {};
   const counters = {
     duplicateCount: 0,
     skippedCount: 0,
@@ -547,32 +775,188 @@ export async function runCollection({ trigger = 'manual' } = {}) {
     verificationFailedCount: 0,
     trustedCount: 0,
     createdEventCount: 0,
-    updatedEventCount: 0
+    updatedEventCount: 0,
+    acceptedCount: 0,
+    rejectedCount: 0,
+    analysisLimit,
+    candidateCount: 0
   };
   const sourceStats = buildSourceStats();
+  let totalCollectedCount = 0;
 
   for (const keyword of keywords) {
+    const expandedKeywords =
+      keywordExpansionMap.get(String(keyword.term).toLowerCase()) ||
+      expansionListForKeyword(keyword.term, keywordExpansions);
+    const keywordCandidateEntries = [];
+
     for (const source of keywordSources) {
-      await processSourceItems({
+      setCollectionProgress({
+        phase: 'collecting',
+        currentSource: source.name,
+        currentKeyword: keyword.term,
+        collectedCount: totalCollectedCount + keywordCandidateEntries.length,
+        candidateCount: counters.candidateCount
+      });
+      const collectedEntries = await collectSourceCandidates({
         source,
         settings,
         keyword,
-        trigger,
-        createdItems,
-        counters,
-        sourceStats
+        expandedKeywords,
+        sourceStats,
+        sourceMetrics
+      });
+      keywordCandidateEntries.push(...collectedEntries);
+      setCollectionProgress({
+        phase: 'collecting',
+        currentSource: source.name,
+        currentKeyword: keyword.term,
+        collectedCount: totalCollectedCount + keywordCandidateEntries.length,
+        candidateCount: counters.candidateCount
       });
     }
+
+    totalCollectedCount += keywordCandidateEntries.length;
+    const dedupedEntries = Array.from(
+      keywordCandidateEntries.reduce((map, entry) => {
+        const key = candidateDedupeKey(entry);
+        if (!key || map.has(key)) {
+          counters.duplicateCount += 1;
+          return map;
+        }
+        map.set(key, entry);
+        return map;
+      }, new Map()).values()
+    ).sort(prioritizeCandidateEntries);
+    counters.candidateCount += dedupedEntries.length;
+    const entriesForAnalysis = selectEntriesForAnalysis(dedupedEntries, analysisLimit, scanBudget.mode);
+    if (dedupedEntries.length > entriesForAnalysis.length) {
+      counters.hitAnalysisLimit = true;
+    }
+    counters.pendingAnalysisCount += Math.max(0, dedupedEntries.length - entriesForAnalysis.length);
+
+    const activeItems = new Map();
+    let workId = 0;
+    let keywordStartedCount = 0;
+    let keywordCompletedCount = 0;
+    setCollectionProgress({
+      phase: 'verifying',
+      currentSource: null,
+      currentKeyword: keyword.term,
+      collectedCount: totalCollectedCount,
+      candidateCount: counters.candidateCount,
+      analysisLimit,
+      totalToProcess: entriesForAnalysis.length,
+      startedCount: 0,
+      completedCount: keywordCompletedCount,
+      acceptedCount: counters.acceptedCount,
+      rejectedCount: counters.rejectedCount,
+      remainingCount: entriesForAnalysis.length,
+      activeCount: 0,
+      currentItems: []
+    });
+
+    await runLimited(entriesForAnalysis, scanBudget.concurrency, async ({ source, keyword: entryKeyword, expandedKeywords: entryExpandedKeywords, item }) => {
+      const currentWorkId = ++workId;
+      const metric = metricFor(sourceMetrics, source.name);
+      counters.processedCount += 1;
+      keywordStartedCount += 1;
+      metric.processed += 1;
+      activeItems.set(currentWorkId, compactProgressItem({ source, keyword: entryKeyword, item }));
+      setCollectionProgress({
+        phase: 'verifying',
+        currentKeyword: entryKeyword?.term || keyword.term,
+        startedCount: keywordStartedCount,
+        completedCount: keywordCompletedCount,
+        acceptedCount: counters.acceptedCount,
+        rejectedCount: counters.rejectedCount,
+        remainingCount: Math.max(0, entriesForAnalysis.length - keywordCompletedCount - activeItems.size),
+        activeCount: activeItems.size,
+        currentItems: Array.from(activeItems.values())
+      });
+
+      try {
+        const result = await processCandidateByRelevance({
+          item,
+          keyword: entryKeyword,
+          settings,
+          expandedKeywords: entryExpandedKeywords
+        });
+        const projected = projectEvent(result.event);
+        counters.aiReviewedCount += result.aiCallCount || 0;
+        if (result.aiFailed) {
+          counters.analysisErrorCount += 1;
+          counters.analysisErrorMessage ||= result.aiError || 'AI 分析失败';
+        }
+        if (result.fullTextFetched) counters.fullTextFetchedCount += 1;
+        if (result.bodyUnavailable) metric.bodyUnavailable += 1;
+        if (result.verificationFailed) {
+          counters.verificationFailedCount += 1;
+          metric.filtered += 1;
+        }
+        if (result.accepted && result.event.verificationStatus === 'trusted') {
+          counters.acceptedCount += 1;
+          counters.trustedCount += 1;
+          metric.trusted += 1;
+        } else {
+          counters.rejectedCount += 1;
+        }
+        if (result.created) counters.createdEventCount += 1;
+        else counters.updatedEventCount += 1;
+
+        if (result.accepted && result.event.verificationStatus === 'trusted') {
+          const existingIndex = createdItems.findIndex((entry) => entry.id === projected.id);
+          if (existingIndex >= 0) createdItems[existingIndex] = projected;
+          else createdItems.push(projected);
+          socketHub.broadcast('scan:item', {
+            ...projected,
+            scannedAt: new Date().toISOString(),
+            scanIsNew: result.created
+          });
+        }
+
+        if (result.accepted && result.event.verificationStatus === 'trusted') {
+          await dispatchEventNotifications({
+            event: result.event,
+            hotspot: projected,
+            settings,
+            trigger
+          });
+        }
+      } catch (error) {
+        counters.analysisErrorCount += 1;
+        counters.analysisErrorMessage ||= error.message;
+        counters.verificationFailedCount += 1;
+        counters.skippedCount += 1;
+        metric.failed += 1;
+        metric.filtered += 1;
+        console.error('[deep-verification] 热点深度核验失败', error.message);
+      } finally {
+        activeItems.delete(currentWorkId);
+        keywordCompletedCount += 1;
+        setCollectionProgress({
+          phase: 'verifying',
+          currentKeyword: entryKeyword?.term || keyword.term,
+          startedCount: keywordStartedCount,
+          completedCount: keywordCompletedCount,
+          acceptedCount: counters.acceptedCount,
+          rejectedCount: counters.rejectedCount,
+          remainingCount: Math.max(0, entriesForAnalysis.length - keywordCompletedCount - activeItems.size),
+          activeCount: activeItems.size,
+          currentItems: Array.from(activeItems.values())
+        });
+      }
+    });
   }
 
-  for (const source of hotSources) {
-    await processSourceItems({
-      source,
-      settings,
-      trigger,
-      createdItems,
-      counters,
-      sourceStats
+  for (const source of [...keywordSources, ...hotSources]) {
+    const metric = metricFor(sourceMetrics, source.name);
+    await recordSourceHealth({
+      sourceType: source.name,
+      startedAt: metric.startedAt,
+      candidateCount: metric.collected,
+      filteredCount: metric.filtered,
+      error: metric.error && metric.collected === 0 ? metric.error : null
     });
   }
 
@@ -585,12 +969,18 @@ export async function runCollection({ trigger = 'manual' } = {}) {
     return {
       trigger,
       aiProvider,
+      analysisMode: scanBudget.mode,
+      analysisLimit,
+      analysisConcurrency: scanBudget.concurrency,
+      candidateCount: 0,
       message: '暂无启用中的关键词，且热榜源均已停用',
       warning: buildCollectionWarning({ createdCount: 0, counters }),
       createdCount: 0,
       duplicateCount: 0,
       skippedCount: 0,
       processedCount: 0,
+      acceptedCount: 0,
+      rejectedCount: 0,
       analysisErrorCount: 0,
       pendingAnalysisCount: 0,
       hitAnalysisLimit: false,
@@ -605,7 +995,9 @@ export async function runCollection({ trigger = 'manual' } = {}) {
       trustedCount: 0,
       createdEventCount: 0,
       updatedEventCount: 0,
+      keywordExpansions,
       sourceStats,
+      sourceMetrics,
       items: []
     }
   }
@@ -618,12 +1010,18 @@ export async function runCollection({ trigger = 'manual' } = {}) {
   return {
     trigger,
     aiProvider,
+    analysisMode: scanBudget.mode,
+    analysisLimit,
+    analysisConcurrency: scanBudget.concurrency,
+    candidateCount: counters.candidateCount,
     message,
     warning,
     createdCount: createdItems.length,
     duplicateCount: counters.duplicateCount,
     skippedCount: counters.skippedCount,
     processedCount: counters.processedCount,
+    acceptedCount: counters.acceptedCount,
+    rejectedCount: counters.rejectedCount,
     analysisErrorCount: counters.analysisErrorCount,
     pendingAnalysisCount: counters.pendingAnalysisCount,
     hitAnalysisLimit: counters.hitAnalysisLimit,
@@ -638,7 +1036,9 @@ export async function runCollection({ trigger = 'manual' } = {}) {
     trustedCount: counters.trustedCount,
     createdEventCount: counters.createdEventCount,
     updatedEventCount: counters.updatedEventCount,
+    keywordExpansions,
     sourceStats,
+    sourceMetrics,
     items: createdItems
   };
 }
@@ -651,6 +1051,11 @@ export async function searchHotspotsAcrossSources({ query }) {
 
   const settings = await ensureSettings();
   const enabledSources = getEnabledKeywordSources(settings);
+  const [keywordExpansion] = await resolveKeywordExpansions({
+    keywords: [{ term: trimmedQuery }],
+    settings
+  });
+  const expandedKeywords = keywordExpansion?.expandedKeywords || expansionListForKeyword(trimmedQuery, []);
   const settledResults = await Promise.allSettled(
     enabledSources.map(async (source) => {
       const items = await source.runner({
@@ -708,13 +1113,56 @@ export async function searchHotspotsAcrossSources({ query }) {
     }, new Map())
   )
     .map(([, item]) => item)
-    .sort(compareSearchItems);
+    .sort((left, right) => prioritizeCandidateEntries({ item: left }, { item: right }))
+    .slice(0, 10);
+
+  const analyzedResults = await Promise.all(
+    dedupedResults.map(async (item) => {
+      const fullText = `${item.title || ''}\n${item.snippet || ''}`.trim();
+      const preMatchResult = buildSearchPreMatch(fullText, expandedKeywords);
+      const analysis = await analyzeContent(fullText, trimmedQuery, preMatchResult, settings);
+      const decision = calculateRelevanceDecision({
+        analysis,
+        preMatchResult,
+        article: {
+          title: item.title,
+          snippet: item.snippet,
+          bodyText: ''
+        },
+        expandedKeywords
+      });
+      const heatScore = calculateHeatScore(item);
+      return {
+        ...item,
+        matchedKeywords: decision.matchedKeywords,
+        relevanceReason: decision.relevanceReason,
+        keywordMentioned: decision.keywordMentioned,
+        aiRelevance: decision.relevanceScore,
+        aiImportance: decision.importance,
+        aiSummary: decision.summary,
+        heatScore,
+        heatLabel: getHeatLabel(heatScore),
+        accepted: decision.accepted
+      };
+    })
+  );
+
+  const visibleResults = analyzedResults
+    .filter((item) => item.accepted)
+    .sort((left, right) => {
+      const heatDiff = Number(right.heatScore || 0) - Number(left.heatScore || 0);
+      if (heatDiff !== 0) return heatDiff;
+      const relevanceDiff = Number(right.aiRelevance || 0) - Number(left.aiRelevance || 0);
+      if (relevanceDiff !== 0) return relevanceDiff;
+      return compareSearchItems(left, right);
+    });
 
   return {
-    items: dedupedResults,
+    items: visibleResults,
     meta: {
       query: trimmedQuery,
-      total: dedupedResults.length,
+      total: visibleResults.length,
+      expandedKeywords,
       enabledSources: enabledSources.map((source) => source.name),
       sourceStats,
       searchedAt: new Date().toISOString()

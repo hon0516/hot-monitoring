@@ -8,24 +8,21 @@ const sourceLabels = {
   'hacker-news': 'Hacker News',
   twitter: '推特',
   bilibili: '哔哩哔哩',
+  weibo: '微博',
+  'weibo-hot': '微博热搜',
   sogou: '搜狗'
 };
 
 function sortHotspotsByDiscoveredAt(collection) {
   collection.sort((left, right) => {
-    const trustDiff = Number(right?.trustScore ?? -1) - Number(left?.trustScore ?? -1);
-    if (trustDiff !== 0) {
-      return trustDiff;
+    const heatDiff = Number(right?.heatScore ?? -1) - Number(left?.heatScore ?? -1);
+    if (heatDiff !== 0) {
+      return heatDiff;
     }
 
     const relevanceDiff = Number(right?.aiRelevance ?? -1) - Number(left?.aiRelevance ?? -1);
     if (relevanceDiff !== 0) {
       return relevanceDiff;
-    }
-
-    const sourceQualityDiff = Number(right?.sourceQualityScore ?? -1) - Number(left?.sourceQualityScore ?? -1);
-    if (sourceQualityDiff !== 0) {
-      return sourceQualityDiff;
     }
 
     const rightTime = new Date(right?.discoveredAt || 0).getTime();
@@ -52,11 +49,18 @@ function mergeRealtimeHotspot(collection, payload) {
       aiImportance: payload.importance,
       heatScore: payload.heatScore,
       heatLabel: payload.heatLabel,
+      matchedKeywords: payload.matchedKeywords || [],
+      relevanceReason: payload.relevanceReason || '',
+      keywordMentioned: payload.keywordMentioned ?? null,
       aiRelevance: payload.relevance,
       auditStatus: payload.auditStatus,
       aiConfidence: payload.aiConfidence,
       trustScore: payload.trustScore,
       sourceQualityScore: payload.sourceQualityScore,
+      sourceAuthorityScore: payload.sourceAuthorityScore,
+      authorityReason: payload.authorityReason,
+      bodyAvailable: payload.bodyAvailable,
+      feedbackSummary: payload.feedbackSummary,
       evidenceScore: payload.evidenceScore,
       corroborationScore: payload.corroborationScore,
       contradictionScore: payload.contradictionScore,
@@ -73,7 +77,7 @@ function mergeRealtimeHotspot(collection, payload) {
       keywords: payload.keywords.map((term) => ({ keyword: { term } }))
     });
     sortHotspotsByDiscoveredAt(collection);
-    return;
+    return { inserted: false, sourceType: payload.sourceType };
   }
 
   collection.push({
@@ -87,11 +91,18 @@ function mergeRealtimeHotspot(collection, payload) {
     aiImportance: payload.importance,
     heatScore: payload.heatScore,
     heatLabel: payload.heatLabel,
+    matchedKeywords: payload.matchedKeywords || [],
+    relevanceReason: payload.relevanceReason || '',
+    keywordMentioned: payload.keywordMentioned ?? null,
     aiRelevance: payload.relevance,
     auditStatus: payload.auditStatus,
     aiConfidence: payload.aiConfidence,
     trustScore: payload.trustScore,
     sourceQualityScore: payload.sourceQualityScore,
+    sourceAuthorityScore: payload.sourceAuthorityScore,
+    authorityReason: payload.authorityReason,
+    bodyAvailable: payload.bodyAvailable,
+    feedbackSummary: payload.feedbackSummary,
     evidenceScore: payload.evidenceScore,
     corroborationScore: payload.corroborationScore,
     contradictionScore: payload.contradictionScore,
@@ -109,6 +120,26 @@ function mergeRealtimeHotspot(collection, payload) {
     notifications: []
   });
   sortHotspotsByDiscoveredAt(collection);
+  return { inserted: true, sourceType: payload.sourceType };
+}
+
+function applyRealtimeCounts(store, sourceType, inserted, { isVerified = false } = {}) {
+  if (!inserted) {
+    return;
+  }
+
+  store.pagination.total = Number(store.pagination.total || 0) + 1;
+  store.sourceCounts.all = Number(store.sourceCounts.all || 0) + 1;
+
+  if (sourceType && sourceType in store.sourceCounts) {
+    store.sourceCounts[sourceType] = Number(store.sourceCounts[sourceType] || 0) + 1;
+  }
+
+  store.latestScanInbox.total = Number(store.latestScanInbox.total || 0) + 1;
+
+  if (isVerified) {
+    store.summary.verifiedHotspots = Number(store.summary.verifiedHotspots || 0) + 1;
+  }
 }
 
 export const useMonitorStore = defineStore('monitor', {
@@ -135,6 +166,8 @@ export const useMonitorStore = defineStore('monitor', {
       'hacker-news': 0,
       twitter: 0,
       bilibili: 0,
+      weibo: 0,
+      'weibo-hot': 0,
       sogou: 0
     },
     settings: null,
@@ -164,6 +197,8 @@ export const useMonitorStore = defineStore('monitor', {
       error: null,
       result: null
     },
+    latestScanToast: null,
+    scanToastSequence: 0,
     socket: null,
     scanStatusPollTimer: null,
     searchPanel: {
@@ -173,7 +208,8 @@ export const useMonitorStore = defineStore('monitor', {
         total: 0,
         sourceStats: {},
         searchedAt: null,
-        enabledSources: []
+        enabledSources: [],
+        expandedKeywords: []
       },
       loading: false
     },
@@ -183,6 +219,8 @@ export const useMonitorStore = defineStore('monitor', {
       'hacker-news': 0,
       twitter: 0,
       bilibili: 0,
+      weibo: 0,
+      'weibo-hot': 0,
       sogou: 0
     }
   }),
@@ -207,9 +245,26 @@ export const useMonitorStore = defineStore('monitor', {
       if (!this.socket) {
         this.socket = createSocketHandlers({
           onHotspotNew: (payload) => {
-            mergeRealtimeHotspot(this.hotspots, payload);
-            this.summary.totalHotspots += 1;
+            const result = mergeRealtimeHotspot(this.hotspots, payload);
+            applyRealtimeCounts(this, result.sourceType, result.inserted, { isVerified: Boolean(payload.isReal) });
+            this.summary.totalHotspots += result.inserted ? 1 : 0;
             this.liveMessage = `捕获新热点：${payload.title}`;
+          },
+          onScanItem: (payload) => {
+            const isNewHotspot = payload.scanIsNew !== false;
+            const result = mergeRealtimeHotspot(this.hotspots, payload);
+            applyRealtimeCounts(this, result.sourceType, result.inserted && isNewHotspot, { isVerified: true });
+            this.summary.totalHotspots += result.inserted && isNewHotspot ? 1 : 0;
+            if (isNewHotspot && result.inserted) {
+              this.scanToastSequence += 1;
+              this.latestScanToast = {
+                id: this.scanToastSequence,
+                title: payload.title,
+                scannedAt: payload.scannedAt || new Date().toISOString(),
+                keywords: Array.isArray(payload.keywords) ? payload.keywords : []
+              };
+            }
+            this.liveMessage = `新增相关热点：${payload.title}`;
           },
           onNotification: (payload) => {
             this.liveMessage = payload.message;
@@ -317,7 +372,8 @@ export const useMonitorStore = defineStore('monitor', {
             total: Number(data.meta?.total || 0),
             sourceStats: data.meta?.sourceStats || {},
             searchedAt: data.meta?.searchedAt || null,
-            enabledSources: data.meta?.enabledSources || []
+            enabledSources: data.meta?.enabledSources || [],
+            expandedKeywords: data.meta?.expandedKeywords || []
           },
           loading: false
         };
@@ -357,6 +413,8 @@ export const useMonitorStore = defineStore('monitor', {
             'hacker-news': Number(result.sourceStats?.['hacker-news'] || 0),
             twitter: Number(result.sourceStats?.twitter || 0),
             bilibili: Number(result.sourceStats?.bilibili || 0),
+            weibo: Number(result.sourceStats?.weibo || 0),
+            'weibo-hot': Number(result.sourceStats?.['weibo-hot'] || 0),
             sogou: Number(result.sourceStats?.sogou || 0)
           };
 
@@ -365,11 +423,13 @@ export const useMonitorStore = defineStore('monitor', {
               .filter(([, count]) => count > 0)
               .map(([source, count]) => `${sourceLabels[source] || source}:${count}`)
               .join(' / ');
-            const pendingSummary =
-              result.pendingAnalysisCount > 0 ? `，其中 ${result.pendingAnalysisCount} 条待 AI 复核` : '';
+            const acceptedSummary =
+              result.acceptedCount !== undefined ? `，展示 ${result.acceptedCount} 条` : '';
+            const rejectedSummary =
+              result.rejectedCount > 0 ? `，过滤 ${result.rejectedCount} 条低相关内容` : '';
             const providerSummary = result.aiProvider ? `，AI:${result.aiProvider}` : '';
             const warning = String(status.warning || '').trim();
-            const resultSummary = `后台扫描完成，新增 ${result.createdCount || 0} 条热点${pendingSummary}${providerSummary}${stats ? `，来源 ${stats}` : ''}`;
+            const resultSummary = `后台扫描完成，新增 ${result.createdCount || 0} 条热点${acceptedSummary}${rejectedSummary}${providerSummary}${stats ? `，来源 ${stats}` : ''}`;
             this.liveMessage = warning ? `${warning} ${resultSummary}` : resultSummary;
           } else if (status.state === 'failed') {
             this.liveMessage = status.error || '后台扫描失败';

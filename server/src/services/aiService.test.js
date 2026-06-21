@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { expandKeyword, normalizeSummaryForTest, preMatchKeyword } from './aiService.js';
+import { buildAnalysisPrompt, expandKeyword, normalizeSummaryForTest, preMatchKeyword } from './aiService.js';
 
 describe('ai summary normalization', () => {
   it('wraps plain summary with the required keyword template', () => {
@@ -56,21 +56,30 @@ describe('ai summary normalization', () => {
 });
 
 describe('keyword expansion and pre-match', () => {
-  it('expands AI programming keywords with compact bilingual variants', () => {
-    const expanded = expandKeyword('AI编程');
+  it('expands split keywords with core terms and adjacent combinations', () => {
+    const expanded = expandKeyword('Claude Sonnet 4.6');
 
-    expect(expanded).toContain('AI编程');
-    expect(expanded).toContain('AI 编程');
-    expect(expanded).toContain('AI coding');
-    expect(expanded.length).toBeLessThanOrEqual(12);
+    expect(expanded).toContain('Claude Sonnet 4.6');
+    expect(expanded).toContain('Claude');
+    expect(expanded).toContain('Sonnet');
+    expect(expanded).toContain('Claude Sonnet');
+    expect(expanded).toContain('Sonnet 4.6');
+    expect(expanded.length).toBeLessThanOrEqual(15);
   });
 
-  it('matches case, spacing and hyphen variants locally', () => {
+  it('matches keywords using case-insensitive substring matching', () => {
     const expanded = expandKeyword('Claude Sonnet 4.6');
-    const result = preMatchKeyword('Anthropic released claude-sonnet-4.6 for coding tasks', expanded);
+    const result = preMatchKeyword('Anthropic released claude sonnet 4.6 for coding tasks', expanded);
 
     expect(result.matched).toBe(true);
-    expect(result.matchedTerms.length).toBeGreaterThan(0);
+    expect(result.matchedTerms).toContain('Claude Sonnet');
+  });
+
+  it('does not normalize spacing or hyphens during pre-match', () => {
+    const result = preMatchKeyword('Anthropic released claude-sonnet-4.6 for coding tasks', ['Claude Sonnet 4.6']);
+
+    expect(result.matched).toBe(false);
+    expect(result.matchedTerms).toEqual([]);
   });
 
   it('does not match unrelated text', () => {
@@ -78,5 +87,19 @@ describe('keyword expansion and pre-match', () => {
 
     expect(result.matched).toBe(false);
     expect(result.matchedTerms).toEqual([]);
+  });
+});
+
+describe('analysis prompt', () => {
+  it('anchors the current date and avoids rejecting new entities by prior knowledge', () => {
+    const prompt = buildAnalysisPrompt(
+      'Fable 5',
+      { matched: true, matchedTerms: ['Fable 5'] },
+      { currentDate: '2026-06-18', scope: 'AI 编程' }
+    );
+
+    expect(prompt).toContain('当前日期：2026-06-18');
+    expect(prompt).toContain('监控语境：AI 编程');
+    expect(prompt).toContain('不要仅凭你已有知识');
   });
 });

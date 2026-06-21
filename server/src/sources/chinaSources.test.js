@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapBilibiliSearchResults, parseBilibiliSearchHtml, searchBilibili } from './bilibiliSource.js';
 import { searchSogou, parseSogouSearchResults } from './sogouSource.js';
-import { parseWeiboRealtimePage, searchWeibo } from './weiboSource.js';
+import { parseWeiboPublicHotResponse, parseWeiboRealtimePage, searchWeibo } from './weiboSource.js';
 import { parseWeiboHotMarkdown, searchWeiboHot } from './weiboHotSource.js';
+
+function recentDateText(time = '12:00') {
+  return `${new Date().toISOString().slice(0, 10)} ${time}`;
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -63,6 +67,28 @@ describe('china source runners', () => {
     });
     expect(items[0].url).toBe('https://weibo.com/1/abc');
     expect(items[0].snippet).toContain('AI 发布会');
+  });
+
+  it('parses weibo public hot search response', () => {
+    const items = parseWeiboPublicHotResponse(
+      {
+        ok: 1,
+        data: {
+          realtime: [
+            { word: 'AI 模型发布', num: 123456 },
+            { word: '体育新闻', num: 654321 }
+          ]
+        }
+      },
+      'AI'
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      sourceType: 'weibo',
+      sourceAuthor: '微博热搜',
+      title: '微博热搜：AI 模型发布'
+    });
   });
 
   it('parses sogou search results html', () => {
@@ -167,23 +193,27 @@ describe('china source runners', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: async () => `
-          <title>Sina Visitor System</title>
-          最后更新时间：2026-06-07 12:00
-          1. [AI 模型发布](https://s.weibo.com/weibo?q=%23AI%E6%A8%A1%E5%9E%8B%E5%8F%91%E5%B8%83%23) 100
-          2. [体育新闻](https://s.weibo.com/weibo?q=%23%E4%BD%93%E8%82%B2%E6%96%B0%E9%97%BB%23) 50
-        `
+        json: async () => ({
+          ok: 1,
+          data: {
+            realtime: [
+              { word: 'AI 模型发布', num: 100 },
+              { word: '体育新闻', num: 50 }
+            ]
+          }
+        })
       })
     );
 
     const items = await searchWeibo({ keyword: 'AI', scope: '' });
     expect(items).toHaveLength(1);
-    expect(items[0].sourceType).toBe('weibo-hot');
+    expect(items[0].sourceType).toBe('weibo');
   });
 
   it('parses weibo hot markdown mirror', () => {
+    const updatedAt = recentDateText();
     const items = parseWeiboHotMarkdown(`
-      最后更新时间：2026-06-07 12:00
+      最后更新时间：${updatedAt}
       1. [AI 模型发布](https://s.weibo.com/weibo?q=%23AI%E6%A8%A1%E5%9E%8B%E5%8F%91%E5%B8%83%23) 100
       2. [体育新闻](https://s.weibo.com/weibo?q=%23%E4%BD%93%E8%82%B2%E6%96%B0%E9%97%BB%23) 50
     `);
@@ -197,12 +227,13 @@ describe('china source runners', () => {
   });
 
   it('searchWeiboHot filters mirror results by keyword', async () => {
+    const updatedAt = recentDateText();
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
         text: async () => `
-          最后更新时间：2026-06-07 12:00
+          最后更新时间：${updatedAt}
           1. [AI 模型发布](https://s.weibo.com/weibo?q=%23AI%E6%A8%A1%E5%9E%8B%E5%8F%91%E5%B8%83%23) 100
           2. [体育新闻](https://s.weibo.com/weibo?q=%23%E4%BD%93%E8%82%B2%E6%96%B0%E9%97%BB%23) 50
         `
@@ -215,6 +246,7 @@ describe('china source runners', () => {
   });
 
   it('searchWeibo prefers realtime page results when accessible', async () => {
+    const publishedAt = recentDateText('12:30');
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -225,7 +257,7 @@ describe('china source runners', () => {
               <div class="content">
                 <div class="info"><a class="name" href="/u/1">测试用户</a></div>
                 <p node-type="feed_list_content">AI 新模型正式发布</p>
-                <div class="from"><a href="//weibo.com/1/abc">2026-06-06 12:30</a></div>
+                <div class="from"><a href="//weibo.com/1/abc">${publishedAt}</a></div>
               </div>
             </div>
           </div>

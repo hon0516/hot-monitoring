@@ -62,6 +62,26 @@ const metrics = computed(() => [
     label: '启用关键词',
     value: store.summary.activeKeywords,
     help: '当前启用关键词'
+  },
+  {
+    label: '可信率',
+    value: store.summary.trustedRate,
+    help: 'trusted / 全部事件'
+  },
+  {
+    label: '正文抓取率',
+    value: store.summary.bodyFetchSuccessRate,
+    help: '来源正文可核验比例'
+  },
+  {
+    label: '误报反馈',
+    value: store.summary.falsePositiveFeedbackCount,
+    help: '人工标记误报累计'
+  },
+  {
+    label: '渠道阻断',
+    value: Number(store.summary.blockedSourceCount || 0) + Number(store.summary.rateLimitedSourceCount || 0),
+    help: '访问受限或限流来源'
   }
 ]);
 

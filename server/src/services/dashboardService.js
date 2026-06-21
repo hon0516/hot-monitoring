@@ -7,7 +7,18 @@ const VISIBLE_SOURCE_WHERE = {
 };
 
 export async function getDashboardSummary() {
-  const [totalHotspots, verifiedHotspots, urgentHotspots, activeKeywords, latestHotspot] = await Promise.all([
+  const [
+    totalHotspots,
+    verifiedHotspots,
+    urgentHotspots,
+    activeKeywords,
+    latestHotspot,
+    totalSourceItems,
+    fetchedSourceItems,
+    falsePositiveFeedbackCount,
+    blockedSourceCount,
+    rateLimitedSourceCount
+  ] = await Promise.all([
     prisma.hotspotEvent.count(),
     prisma.hotspotEvent.count({ where: { verificationStatus: 'trusted' } }),
     prisma.hotspotEvent.count({
@@ -25,14 +36,26 @@ export async function getDashboardSummary() {
       orderBy: {
         lastSeenAt: 'desc'
       }
-    })
+    }),
+    prisma.hotspotSourceItem.count(),
+    prisma.hotspotSourceItem.count({ where: { fetchStatus: 'fetched' } }),
+    prisma.verificationFeedback.count({ where: { type: 'false_positive' } }),
+    prisma.sourceHealth.count({ where: { status: 'blocked' } }),
+    prisma.sourceHealth.count({ where: { status: 'rate_limited' } })
   ]);
+  const trustedRate = totalHotspots ? Math.round((verifiedHotspots / totalHotspots) * 100) : 0;
+  const bodyFetchSuccessRate = totalSourceItems ? Math.round((fetchedSourceItems / totalSourceItems) * 100) : 0;
 
   return {
     totalHotspots,
     verifiedHotspots,
     urgentHotspots,
     activeKeywords,
-    latestDiscoveredAt: latestHotspot?.lastSeenAt || null
+    latestDiscoveredAt: latestHotspot?.lastSeenAt || null,
+    trustedRate,
+    bodyFetchSuccessRate,
+    falsePositiveFeedbackCount,
+    blockedSourceCount,
+    rateLimitedSourceCount
   };
 }

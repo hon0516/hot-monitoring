@@ -1,3 +1,5 @@
+import { env } from '../config/env.js';
+
 export function buildQueryVariants({ keyword, scope }) {
   const variants = [keyword, [keyword, scope].filter(Boolean).join(' ')];
 
@@ -55,7 +57,6 @@ export function buildInternationalQueryVariants({ keyword, scope }) {
 }
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
-const MAX_SOURCE_AGE_DAYS = 30;
 
 function parsePublishedAt(value) {
   if (!value) {
@@ -66,7 +67,7 @@ function parsePublishedAt(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-export function filterRecentSourceItems(items, maxAgeDays = MAX_SOURCE_AGE_DAYS) {
+export function filterRecentSourceItems(items, maxAgeDays = env.sourceMaxAgeDays) {
   const cutoff = Date.now() - maxAgeDays * DAY_IN_MS;
 
   return items.filter((item) => {

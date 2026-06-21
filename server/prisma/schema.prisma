@@ -17,6 +17,21 @@ model Keyword {
   updatedAt       DateTime         @updatedAt
 }
 
+model KeywordExpansion {
+  id                    Int      @id @default(autoincrement())
+  normalizedKeyword     String   @unique
+  originalKeyword       String
+  expandedKeywordsJson  String
+  provider              String?
+  model                 String?
+  source                String   @default("rule_fallback")
+  lastUsedAt            DateTime @default(now())
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([lastUsedAt])
+}
+
 model Setting {
   id                      Int      @id @default(autoincrement())
   scope                   String   @default("AI 编程")
@@ -120,6 +135,10 @@ model HotspotEvent {
   contradictionScore     Int                   @default(0)
   sourceQualityScore     Int                   @default(0)
   trustScore             Int                   @default(0)
+  heatScore              Int                   @default(0)
+  matchedKeywordsJson    String?
+  relevanceReason        String?
+  keywordMentioned       Boolean?
   importance             String                @default("low")
   independentSourceCount Int                   @default(0)
   hasOfficialSource      Boolean               @default(false)
@@ -138,6 +157,7 @@ model HotspotEvent {
 
   @@index([verificationStatus])
   @@index([trustScore])
+  @@index([heatScore])
   @@index([relevanceScore])
   @@index([sourcePublishedAt])
   @@index([lastSeenAt])
@@ -167,6 +187,7 @@ model HotspotSourceItem {
   publisherDomain   String?
   publisherName     String?
   sourceType        String
+  discoverySourceType String?
   sourceAuthor      String?
   sourcePublishedAt DateTime?
   engagementJson    String?
@@ -175,6 +196,10 @@ model HotspotSourceItem {
   isOfficial        Boolean         @default(false)
   isSyndicated      Boolean         @default(false)
   sourceGroup       String?
+  sourceAuthorityScore Int          @default(50)
+  authorityReason  String?
+  officialEntity   String?
+  independenceGroup String?
   evidenceFlagsJson String?
   discoveredAt      DateTime        @default(now())
   lastSeenAt        DateTime        @updatedAt
@@ -185,6 +210,8 @@ model HotspotSourceItem {
   @@index([canonicalUrl])
   @@index([publisherDomain])
   @@index([sourceType])
+  @@index([discoverySourceType])
+  @@index([independenceGroup])
   @@index([bodyHash])
 }
 

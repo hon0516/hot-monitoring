@@ -1,0 +1,10 @@
+[
+  {
+    "keyword": "AI 编程",
+    "title": "示例：OpenAI 发布新的编程智能体能力",
+    "url": "https://example.com/hotspot",
+    "expectedStatus": "trusted",
+    "expectedRelevance": 80,
+    "expectedRiskFlags": []
+  }
+]

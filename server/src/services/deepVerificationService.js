@@ -4,10 +4,13 @@ import { requestStructuredAnalysis } from './aiService.js';
 import { semanticRelevanceScore } from './embeddingService.js';
 import { fetchArticleContent } from './contentService.js';
 import { buildEventFingerprint, findBestEventCluster, titleSimilarity } from './eventClusteringService.js';
+import { normalizeExpansionKey } from './keywordExpansionService.js';
 import { normalizeTitle } from '../utils/normalize.js';
 import { searchBing } from '../sources/bingSource.js';
 import { searchGoogleNews } from '../sources/googleNewsSource.js';
-import { verificationConfig, getSourceAuthority } from '../config/verificationConfig.js';
+import { assessSourceAuthority, verificationConfig } from '../config/verificationConfig.js';
+import { env } from '../config/env.js';
+import { calculateHeatScore } from '../utils/heat.js';
 
 export const DEEP_AUDIT_VERSION = 'deep-verify-v1';
 
@@ -81,8 +84,12 @@ function safeArray(value, max = 20) {
 }
 
 function safeJson(value, fallback = []) {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
   try {
-    return JSON.parse(value);
+    const parsed = JSON.parse(value);
+    return parsed === null || parsed === undefined ? fallback : parsed;
   } catch {
     return fallback;
   }
@@ -101,6 +108,53 @@ function claimKey(statement) {
 function sourceGroup(domain) {
   const parts = String(domain || '').split('.').filter(Boolean);
   return parts.length >= 2 ? parts.slice(-2).join('.') : domain || '';
+}
+
+function parseEvidenceFlags(source) {
+  return safeJson(source?.evidenceFlagsJson, []);
+}
+
+function keywordTermsForEvent(event) {
+  return (event.keywords || []).map((item) => item.keyword?.term || item.term).filter(Boolean);
+}
+
+function attachKeywordExpansions(item, expansionLookup) {
+  const keywordExpansions = keywordTermsForEvent(item).map((keyword) => ({
+    keyword,
+    expandedKeywords: expansionLookup.get(normalizeExpansionKey(keyword)) || []
+  }));
+  return {
+    ...item,
+    keywordExpansions
+  };
+}
+
+function independenceGroup(article) {
+  if (article?.officialEntity) {
+    return `official:${String(article.officialEntity).toLowerCase()}`;
+  }
+  const group = sourceGroup(article?.publisherDomain);
+  return group ? `domain:${group}` : '';
+}
+
+function buildAuthorityFields({ item, article }) {
+  const assessed = assessSourceAuthority({
+    sourceType: item?.sourceType || article?.sourceType,
+    publisherDomain: article.publisherDomain,
+    canonicalUrl: article.canonicalUrl,
+    resolvedUrl: article.resolvedUrl,
+    isOfficial: article.isOfficial,
+    officialEntity: article.officialEntity,
+    fetchStatus: article.fetchStatus
+  });
+
+  return {
+    discoverySourceType: item?.sourceType || article?.sourceType || null,
+    sourceAuthorityScore: article.sourceAuthorityScore ?? assessed.score,
+    authorityReason: article.authorityReason || assessed.reason,
+    officialEntity: article.officialEntity || null,
+    independenceGroup: independenceGroup(article)
+  };
 }
 
 function buildFallbackUnderstanding({ keyword, article, semanticRelevance = null }) {
@@ -222,6 +276,7 @@ async function ensureEvent({ article, keyword, understanding }) {
 
 async function upsertSourceItem({ eventId, item, article, isSyndicated = false }) {
   const canonicalUrl = article.canonicalUrl || item.url;
+  const authorityFields = buildAuthorityFields({ item, article });
   return prisma.hotspotSourceItem.upsert({
     where: { eventId_canonicalUrl: { eventId, canonicalUrl } },
     update: {
@@ -239,6 +294,7 @@ async function upsertSourceItem({ eventId, item, article, isSyndicated = false }
       isOfficial: article.isOfficial,
       isSyndicated,
       sourceGroup: sourceGroup(article.publisherDomain),
+      ...authorityFields,
       evidenceFlagsJson: JSON.stringify(article.evidenceFlags)
     },
     create: {
@@ -252,6 +308,7 @@ async function upsertSourceItem({ eventId, item, article, isSyndicated = false }
       publisherDomain: article.publisherDomain,
       publisherName: article.publisherName,
       sourceType: item.sourceType,
+      discoverySourceType: authorityFields.discoverySourceType,
       sourceAuthor: article.sourceAuthor,
       sourcePublishedAt: normalizeDate(article.sourcePublishedAt),
       engagementJson: item.engagementJson || null,
@@ -260,14 +317,79 @@ async function upsertSourceItem({ eventId, item, article, isSyndicated = false }
       isOfficial: article.isOfficial,
       isSyndicated,
       sourceGroup: sourceGroup(article.publisherDomain),
+      sourceAuthorityScore: authorityFields.sourceAuthorityScore,
+      authorityReason: authorityFields.authorityReason,
+      officialEntity: authorityFields.officialEntity,
+      independenceGroup: authorityFields.independenceGroup,
       evidenceFlagsJson: JSON.stringify(article.evidenceFlags)
     }
   });
 }
 
-async function collectCorroboration({ settings, keyword, event, understanding, primaryArticle }) {
-  const queries = [...new Set([...understanding.searchQueries, event.title].map((item) => String(item || '').trim()).filter(Boolean))]
-    .slice(0, 3);
+function entityMatchedOfficialDomains(understanding) {
+  const text = [
+    ...safeArray(understanding.entities, 10),
+    ...safeArray(understanding.claims, 5).map((claim) => claim.statement)
+  ].join(' ').toLowerCase();
+  const domains = [];
+  for (const rule of verificationConfig.officialEntities) {
+    const entity = String(rule.entity || '').toLowerCase();
+    if (!entity || !text.includes(entity)) {
+      continue;
+    }
+    domains.push(...safeArray(rule.domains, 4));
+  }
+  return [...new Set(domains)].slice(0, 4);
+}
+
+function buildCorroborationQueries({ understanding, event, maxQueries = 8 }) {
+  const baseQueries = [
+    ...safeArray(understanding.searchQueries, 4),
+    event.title
+  ].map((item) => String(item || '').trim()).filter(Boolean);
+  const dedupedBase = [...new Set(baseQueries)].slice(0, 3);
+  const officialDomains = entityMatchedOfficialDomains(understanding);
+  const officialQueries = officialDomains.flatMap((domain) =>
+    dedupedBase.slice(0, 2).map((query) => `site:${domain} ${query}`)
+  );
+  const counterQueries = dedupedBase.slice(0, 2).flatMap((query) => [
+    `${query} 否认`,
+    `${query} 辟谣`,
+    `${query} denies`,
+    `${query} false`
+  ]);
+
+  return [...new Set([...dedupedBase, ...officialQueries, ...counterQueries])].slice(0, maxQueries);
+}
+
+function verificationBudgetForMode(scanMode) {
+  const quick = scanMode === 'quick';
+  return {
+    maxQueries: quick ? env.corroborationMaxQueries : 8,
+    maxArticles: quick ? env.corroborationMaxArticles : 10,
+    fetchTimeoutMs: quick ? env.corroborationFetchTimeoutMs : 15000,
+    minTitleSimilarity: quick ? 0.16 : 0.28,
+    rawItemLimit: quick ? Math.max(12, env.corroborationMaxArticles * 3) : 24
+  };
+}
+
+function quickCorroborationSkipReason({ scanMode, understanding, primaryArticle }) {
+  if (scanMode !== 'quick') return '';
+  const evidenceFlags = safeArray(primaryArticle.evidenceFlags, 12);
+  if (
+    evidenceFlags.includes('body_unavailable') &&
+    clamp(understanding.relevanceScore) < env.quickScanCorroborationMinRelevance
+  ) {
+    return 'primary_body_unavailable';
+  }
+  if (verificationConfig.blockedContentTypes.includes(understanding.contentType)) return 'blocked_content_type';
+  if (!understanding.directlyRelevant) return 'not_directly_relevant';
+  if (clamp(understanding.relevanceScore) < env.quickScanCorroborationMinRelevance) return 'below_quick_relevance_budget';
+  return '';
+}
+
+async function collectCorroboration({ settings, keyword, event, understanding, primaryArticle, budget }) {
+  const queries = buildCorroborationQueries({ understanding, event, maxQueries: budget.maxQueries });
   const rawItems = [];
 
   for (const query of queries) {
@@ -278,21 +400,28 @@ async function collectCorroboration({ settings, keyword, event, understanding, p
     for (const result of settled) {
       if (result.status === 'fulfilled') rawItems.push(...result.value);
     }
-    if (rawItems.length >= 12) break;
+    if (rawItems.length >= budget.rawItemLimit) break;
   }
 
   const seen = new Set([primaryArticle.canonicalUrl]);
   const accepted = [];
   for (const item of rawItems) {
-    if (accepted.length >= 7) break;
-    const article = await fetchArticleContent(item);
+    if (accepted.length >= budget.maxArticles) break;
+    const article = await fetchArticleContent(item, { timeoutMs: budget.fetchTimeoutMs });
     if (!article.canonicalUrl || seen.has(article.canonicalUrl)) continue;
     seen.add(article.canonicalUrl);
     const similarity = titleSimilarity(event.title, article.title);
+    const normalizedText = normalizeTitle(`${article.title || ''} ${article.snippet || ''} ${String(article.bodyText || '').slice(0, 1000)}`);
+    const normalizedKeyword = normalizeTitle(keyword);
+    const keywordMention = Boolean(normalizedKeyword && normalizedText.includes(normalizedKeyword));
+    const entityMention = understanding.entities.some((entity) => {
+      const normalizedEntity = normalizeTitle(entity);
+      return normalizedEntity && normalizedText.includes(normalizedEntity);
+    });
     const claimMention = understanding.claims.some((claim) =>
-      normalizeTitle(article.bodyText || article.snippet).includes(normalizeTitle(claim.statement).slice(0, 24))
+      normalizedText.includes(normalizeTitle(claim.statement).slice(0, 12))
     );
-    if (similarity < 0.28 && !claimMention) continue;
+    if (similarity < budget.minTitleSimilarity && !claimMention && !(keywordMention && (entityMention || similarity >= 0.1))) continue;
     accepted.push({ item, article });
   }
   return accepted;
@@ -300,12 +429,15 @@ async function collectCorroboration({ settings, keyword, event, understanding, p
 
 function markSyndication(sources) {
   const bodyHashes = new Map();
+  const canonicalGroups = new Map();
   return sources.map((source) => {
     const hash = source.bodyHash;
-    if (!hash) return { ...source, isSyndicated: Boolean(source.isSyndicated) };
-    const duplicate = bodyHashes.has(hash);
-    bodyHashes.set(hash, source.id);
-    return { ...source, isSyndicated: duplicate || Boolean(source.isSyndicated) };
+    const group = source.independenceGroup || source.sourceGroup || source.publisherDomain || '';
+    const duplicateBody = hash ? bodyHashes.has(hash) : false;
+    const duplicateGroup = group ? canonicalGroups.has(group) : false;
+    if (hash) bodyHashes.set(hash, source.id);
+    if (group) canonicalGroups.set(group, source.id);
+    return { ...source, isSyndicated: duplicateBody || duplicateGroup || Boolean(source.isSyndicated) };
   });
 }
 
@@ -382,15 +514,36 @@ async function persistClaims(eventId, verifiedClaims, sources) {
 
 function calculateRuleScores({ sources, verifiedClaims, understanding }) {
   const independent = sources.filter((source) => !source.isSyndicated);
-  const domains = new Set(independent.map((source) => source.publisherDomain).filter(Boolean));
+  const evidenceReady = independent.filter((source) =>
+    source.publisherDomain &&
+    source.fetchStatus === 'fetched' &&
+    source.sourcePublishedAt &&
+    !parseEvidenceFlags(source).includes('body_unavailable')
+  );
+  const domains = new Set(
+    independent
+      .map((source) => source.independenceGroup || source.sourceGroup || source.publisherDomain)
+      .filter(Boolean)
+  );
+  const evidenceReadyDomains = new Set(
+    evidenceReady
+      .map((source) => source.independenceGroup || source.sourceGroup || source.publisherDomain)
+      .filter(Boolean)
+  );
   const hasOfficialSource = independent.some((source) => source.isOfficial);
+  const hasEvidenceReadyOfficialSource = evidenceReady.some((source) => source.isOfficial);
   const fetchedCount = independent.filter((source) => source.fetchStatus === 'fetched').length;
   const datedCount = independent.filter((source) => source.sourcePublishedAt).length;
   const authoredCount = independent.filter((source) => source.sourceAuthor).length;
   const supported = verifiedClaims.filter((claim) => claim.status === 'supported').length;
+  const coreSupported = verifiedClaims.filter((claim) => claim.status === 'supported' && claim.importance === 'core').length;
   const partial = verifiedClaims.filter((claim) => claim.status === 'partially_supported').length;
   const contradicted = verifiedClaims.filter((claim) => claim.status === 'contradicted').length;
   const claimCount = Math.max(1, verifiedClaims.length);
+  const bodyUnavailableCount = independent.filter((source) =>
+    source.fetchStatus !== 'fetched' || parseEvidenceFlags(source).includes('body_unavailable')
+  ).length;
+  const publishedMissingCount = independent.filter((source) => !source.sourcePublishedAt).length;
 
   const { evidenceWeights, corroborationTiers } = verificationConfig;
   const evidenceScore = clamp(
@@ -401,10 +554,17 @@ function calculateRuleScores({ sources, verifiedClaims, understanding }) {
     (independent.length >= 2 ? evidenceWeights.multiSourceBonus : 0)
   );
   const sourceQualityScore = clamp(
-    independent.reduce(
-      (sum, source) => sum + getSourceAuthority(source.sourceType, { isOfficial: source.isOfficial }),
-      0
-    ) / Math.max(1, independent.length)
+    independent.reduce((sum, source) => {
+      const fallback = assessSourceAuthority({
+        sourceType: source.sourceType,
+        publisherDomain: source.publisherDomain,
+        isOfficial: source.isOfficial,
+        officialEntity: source.officialEntity,
+        fetchStatus: source.fetchStatus
+      }).score;
+      return sum + Number(source.sourceAuthorityScore ?? fallback);
+    }, 0) /
+      Math.max(1, independent.length)
   );
   const supportRatio = (supported + partial * 0.5) / claimCount;
   const corroborationTier =
@@ -429,8 +589,15 @@ function calculateRuleScores({ sources, verifiedClaims, understanding }) {
     contradictionScore,
     sourceQualityScore,
     independentSourceCount: domains.size,
+    evidenceReadySourceCount: evidenceReadyDomains.size,
     hasOfficialSource,
-    supportedClaimCount: supported
+    hasEvidenceReadyOfficialSource,
+    supportedClaimCount: supported,
+    coreSupportedClaimCount: coreSupported,
+    bodyUnavailableCount,
+    publishedMissingCount,
+    hasBodyGate: evidenceReadyDomains.size >= 2 || hasEvidenceReadyOfficialSource,
+    hasPublishedAtGate: evidenceReadyDomains.size >= 2 || hasEvidenceReadyOfficialSource
   };
 }
 
@@ -450,10 +617,15 @@ async function adjudicate({ settings, ruleScores, understanding, verifiedClaims,
         })),
         sources: sources.map((source) => ({
           domain: source.publisherDomain,
+          discoverySourceType: source.discoverySourceType || source.sourceType,
+          sourceAuthorityScore: source.sourceAuthorityScore,
+          authorityReason: source.authorityReason,
           isOfficial: source.isOfficial,
+          officialEntity: source.officialEntity,
           isSyndicated: source.isSyndicated,
           fetchStatus: source.fetchStatus,
-          publishedAt: source.sourcePublishedAt
+          publishedAt: source.sourcePublishedAt,
+          evidenceFlags: parseEvidenceFlags(source)
         }))
       },
       maxTokens: 700
@@ -506,8 +678,11 @@ function finalizeDecision({ ruleScores, adjudication, understanding, verifiedCla
   const riskFlags = [...new Set(understanding.riskFlags)];
   const blockedType = blockedContentTypes.includes(understanding.contentType);
   const hasEvidenceGate =
-    ruleScores.supportedClaimCount >= 1 &&
-    (ruleScores.independentSourceCount >= 2 || ruleScores.hasOfficialSource);
+    ruleScores.coreSupportedClaimCount >= 1 &&
+    ((ruleScores.evidenceReadySourceCount ?? ruleScores.independentSourceCount) >= 2 ||
+      (ruleScores.hasEvidenceReadyOfficialSource ?? ruleScores.hasOfficialSource)) &&
+    ruleScores.hasBodyGate &&
+    ruleScores.hasPublishedAtGate;
   const trusted =
     understanding.directlyRelevant &&
     relevanceScore >= decisionThresholds.trustedRelevance &&
@@ -563,7 +738,19 @@ function buildVerifiedSummary({ keyword, event, decision, verifiedClaims }) {
     return `此内容与【${keyword}】的关联：${relation}。经 ${decision.independentSourceCount} 个独立来源佐证，核心事实已确认。`
       .slice(0, 220);
   }
-  return `此内容与【${keyword}】的关联：${relation}。当前证据不足，已进入待核验区。`.slice(0, 220);
+  const partiallySupported = verifiedClaims.some((claim) => claim.status === 'partially_supported');
+  const supportedCount = verifiedClaims.filter((claim) => claim.status === 'supported').length;
+  let reviewReason = '当前证据不足，已进入待核验区。';
+  if (decision.independentSourceCount >= 2) {
+    reviewReason = partiallySupported || supportedCount
+      ? `已找到 ${decision.independentSourceCount} 个独立来源，但核心事实仍需更强证据确认。`
+      : `已找到 ${decision.independentSourceCount} 个独立来源，但核心声明尚未被明确支持。`;
+  } else if (decision.hasOfficialSource) {
+    reviewReason = '已发现官方来源，但仍缺少可验证的核心事实支持。';
+  } else if (decision.evidenceScore >= 70) {
+    reviewReason = '原文证据可用，但仍缺少独立来源佐证。';
+  }
+  return `此内容与【${keyword}】的关联：${relation}。${reviewReason}`.slice(0, 220);
 }
 
 function buildCandidateText(article) {
@@ -579,7 +766,7 @@ async function rejectLowRelevanceEvent({ item, keyword, primaryArticle, semantic
     entities: [],
     claims: [],
     searchQueries: [],
-    riskFlags: ['low_semantic_relevance']
+    riskFlags: [...new Set([...(primaryArticle.evidenceFlags || []), 'low_semantic_relevance'])]
   };
   const event = await ensureEvent({ article: primaryArticle, keyword, understanding });
   await upsertSourceItem({ eventId: event.id, item, article: primaryArticle });
@@ -610,13 +797,14 @@ async function rejectLowRelevanceEvent({ item, keyword, primaryArticle, semantic
     event: updated,
     created: event.firstSeenAt.getTime() === event.lastSeenAt.getTime(),
     fullTextFetched: primaryArticle.fetchStatus === 'fetched',
+    bodyUnavailable: primaryArticle.evidenceFlags.includes('body_unavailable'),
     corroborated: false,
     verificationFailed: true,
     aiCallCount: 0
   };
 }
 
-export async function processCandidateAsEvent({ item, keyword, settings }) {
+export async function processCandidateAsEvent({ item, keyword, settings, scanMode = 'deep' }) {
   const primaryArticle = {
     ...(await fetchArticleContent(item)),
     sourceType: item.sourceType
@@ -640,16 +828,31 @@ export async function processCandidateAsEvent({ item, keyword, settings }) {
     article: primaryArticle,
     semanticRelevance
   });
+  understanding.riskFlags = [...new Set([...(primaryArticle.evidenceFlags || []), ...understanding.riskFlags])];
   const event = await ensureEvent({ article: primaryArticle, keyword, understanding });
   await upsertSourceItem({ eventId: event.id, item, article: primaryArticle });
 
-  const corroboration = await collectCorroboration({
-    settings,
-    keyword: keyword.term,
-    event,
+  const corroborationBudget = verificationBudgetForMode(scanMode);
+  const corroborationSkipReason = quickCorroborationSkipReason({
+    scanMode,
     understanding,
     primaryArticle
   });
+  if (corroborationSkipReason) {
+    understanding.riskFlags = [
+      ...new Set([...understanding.riskFlags, 'quick_scan_corroboration_skipped', corroborationSkipReason])
+    ];
+  }
+  const corroboration = corroborationSkipReason
+    ? []
+    : await collectCorroboration({
+        settings,
+        keyword: keyword.term,
+        event,
+        understanding,
+        primaryArticle,
+        budget: corroborationBudget
+      });
   for (const candidate of corroboration) {
     await upsertSourceItem({
       eventId: event.id,
@@ -768,6 +971,7 @@ export async function processCandidateAsEvent({ item, keyword, settings }) {
     event: updated,
     created: event.firstSeenAt.getTime() === event.lastSeenAt.getTime(),
     fullTextFetched: primaryArticle.fetchStatus === 'fetched',
+    bodyUnavailable: primaryArticle.evidenceFlags.includes('body_unavailable'),
     corroborated: decision.independentSourceCount >= 2,
     verificationFailed: ['needs_review', 'contradicted', 'rejected'].includes(decision.verificationStatus)
     ,
@@ -780,6 +984,16 @@ export function parseEventAuditEvidence(value) {
 }
 
 function eventEvidenceLines(event) {
+  if (['relevance-v1', 'yupi-analysis-v1'].includes(event.auditVersion)) {
+    const audit = parseEventAuditEvidence(event.auditEvidenceJson);
+    return [
+      event.relevanceReason || audit.relevanceReason || '',
+      audit.matchedFields?.length ? `命中字段：${audit.matchedFields.join('、')}` : '',
+      audit.matchedKeywords?.length ? `命中关键词：${audit.matchedKeywords.join('、')}` : '',
+      typeof audit.keywordMentioned === 'boolean' ? `直接提及关键词：${audit.keywordMentioned ? '是' : '否'}` : ''
+    ].filter(Boolean).join('\n');
+  }
+
   const audit = parseEventAuditEvidence(event.auditEvidenceJson);
   const lines = [];
   if (audit.reason) lines.push(`最终裁决：${audit.reason}`);
@@ -791,7 +1005,23 @@ function eventEvidenceLines(event) {
   );
   const supported = safeArray(audit.claims).filter((claim) => claim.status === 'supported').length;
   if (supported) lines.push(`${supported} 条核心事实获得来源支持。`);
+  if (event.sourceItems?.some((source) => parseEvidenceFlags(source).includes('body_unavailable'))) {
+    lines.push('存在正文缺失来源，可信状态将保持保守。');
+  }
   return lines.join('\n');
+}
+
+function sanitizeProjectedSummary(event, primarySource) {
+  const summary = String(event.summary || '').trim();
+  const fallback = event.relevanceReason || '该内容通过关键词感知 AI 分析过滤。';
+  const cleaned = summary
+    .replace(/当前证据不足，已进入待核验区。?/gu, fallback)
+    .replace(/已找到\s*\d+\s*个独立来源，但核心事实仍需更强证据确认。?/gu, fallback)
+    .replace(/已找到\s*\d+\s*个独立来源，但核心声明尚未被明确支持。?/gu, fallback)
+    .replace(/已发现官方来源，但仍缺少可验证的核心事实支持。?/gu, fallback)
+    .replace(/原文证据可用，但仍缺少独立来源佐证。?/gu, fallback);
+
+  return cleaned || primarySource?.snippet || event.title;
 }
 
 export function projectEvent(event) {
@@ -799,6 +1029,17 @@ export function projectEvent(event) {
     event.sourceItems?.find((source) => source.canonicalUrl === event.primaryUrl) ||
     event.sourceItems?.[0] ||
     null;
+  const sourceItems = event.sourceItems || [];
+  const bodyAvailable = sourceItems.some((source) => source.fetchStatus === 'fetched');
+  const feedbackItems = event.feedback || [];
+  const feedbackSummary = feedbackItems.reduce(
+    (summary, item) => {
+      summary.total += 1;
+      summary[item.type] = (summary[item.type] || 0) + 1;
+      return summary;
+    },
+    { total: 0 }
+  );
   return {
     id: event.id,
     title: event.title,
@@ -813,7 +1054,7 @@ export function projectEvent(event) {
     aiIsReal: event.verificationStatus === 'trusted',
     aiRelevance: event.relevanceScore,
     aiImportance: event.importance,
-    aiSummary: event.summary,
+    aiSummary: sanitizeProjectedSummary(event, primarySource),
     aiEvidence: eventEvidenceLines(event),
     auditStatus:
       event.verificationStatus === 'trusted'
@@ -825,10 +1066,24 @@ export function projectEvent(event) {
             : 'needs_review',
     verificationStatus: event.verificationStatus,
     trustScore: event.trustScore,
+    heatScore: calculateHeatScore({
+      heatScore: event.heatScore,
+      engagementJson: primarySource?.engagementJson,
+      sourcePublishedAt: event.sourcePublishedAt,
+      discoveredAt: event.firstSeenAt,
+      lastSeenAt: event.lastSeenAt
+    }),
+    matchedKeywords: safeJson(event.matchedKeywordsJson, []),
+    relevanceReason: event.relevanceReason || '',
+    keywordMentioned: event.keywordMentioned ?? null,
     evidenceScore: event.evidenceScore,
     corroborationScore: event.corroborationScore,
     contradictionScore: event.contradictionScore,
     sourceQualityScore: event.sourceQualityScore,
+    sourceAuthorityScore: primarySource?.sourceAuthorityScore ?? event.sourceQualityScore,
+    authorityReason: primarySource?.authorityReason || '',
+    bodyAvailable,
+    feedbackSummary,
     corroborationCount: event.independentSourceCount,
     independentSourceCount: event.independentSourceCount,
     hasOfficialSource: event.hasOfficialSource,
@@ -836,8 +1091,60 @@ export function projectEvent(event) {
     auditVersion: event.auditVersion,
     contentType: event.contentType,
     keywords: event.keywords || [],
-    sources: event.sourceItems || [],
-    claims: event.claims || []
+    sources: sourceItems,
+    claims: event.claims || [],
+    feedback: feedbackItems
+  };
+}
+
+function buildQualityWhere(quality) {
+  const normalized = String(quality || '').trim();
+  if (normalized === 'official') {
+    return { hasOfficialSource: true };
+  }
+  if (normalized === 'multi_source') {
+    return { independentSourceCount: { gte: 2 } };
+  }
+  if (normalized === 'body_missing') {
+    return {
+      sourceItems: {
+        some: {
+          evidenceFlagsJson: {
+            contains: 'body_unavailable'
+          }
+        }
+      }
+    };
+  }
+  if (normalized === 'low_evidence') {
+    return {
+      OR: [
+        { evidenceScore: { lt: 60 } },
+        { corroborationScore: { lt: 60 } },
+        { verificationStatus: 'needs_review' }
+      ]
+    };
+  }
+  if (normalized === 'feedback') {
+    return {
+      feedback: {
+        some: {}
+      }
+    };
+  }
+  return {};
+}
+
+function getEventFreshnessWhere() {
+  const cutoff = new Date(Date.now() - env.hotspotMaxAgeDays * 24 * 60 * 60 * 1000);
+  return {
+    OR: [
+      { sourcePublishedAt: { gte: cutoff } },
+      {
+        sourcePublishedAt: null,
+        lastSeenAt: { gte: cutoff }
+      }
+    ]
   };
 }
 
@@ -845,15 +1152,23 @@ export async function listVerifiedEvents(filters = {}) {
   const page = Math.max(1, Number.parseInt(filters.page || '1', 10) || 1);
   const pageSize = Math.min(50, Math.max(1, Number.parseInt(filters.pageSize || '12', 10) || 12));
   const requestedStatus = String(filters.status || '').trim();
-  const verificationStatus = ['trusted', 'needs_review'].includes(requestedStatus) ? requestedStatus : 'all';
-  const statusFilter =
-    verificationStatus === 'all'
-      ? { in: ['trusted', 'needs_review'] }
-      : verificationStatus;
+  const verificationStatus = ['trusted', 'rejected'].includes(requestedStatus) ? requestedStatus : 'trusted';
+  const statusFilter = verificationStatus;
+  const qualityWhere = buildQualityWhere(filters.quality);
+  const filterClauses = [];
+  if (filters.sourceType) {
+    filterClauses.push({
+      sourceItems: {
+        some: { sourceType: String(filters.sourceType) }
+      }
+    });
+  }
+  if (Object.keys(qualityWhere).length) {
+    filterClauses.push(qualityWhere);
+  }
+  filterClauses.push(getEventFreshnessWhere());
   const where = {
     verificationStatus: statusFilter,
-    relevanceScore: verificationStatus === 'trusted' ? { gte: 75 } : undefined,
-    trustScore: verificationStatus === 'trusted' ? { gte: 80 } : undefined,
     keywords: filters.keyword
       ? {
           some: {
@@ -863,25 +1178,21 @@ export async function listVerifiedEvents(filters = {}) {
           }
         }
       : undefined,
-    sourceItems: filters.sourceType
-      ? {
-          some: { sourceType: String(filters.sourceType) }
-        }
-      : undefined
+    AND: filterClauses.length ? filterClauses : undefined
   };
   const include = {
     keywords: { include: { keyword: true } },
     sourceItems: { orderBy: { discoveredAt: 'asc' } },
-    claims: true
+    claims: true,
+    feedback: true
   };
   const [items, total, allForCounts] = await Promise.all([
     prisma.hotspotEvent.findMany({
       where,
       include,
       orderBy: [
-        { trustScore: 'desc' },
-        { importance: 'desc' },
-        { corroborationScore: 'desc' },
+        { heatScore: 'desc' },
+        { relevanceScore: 'desc' },
         { sourcePublishedAt: 'desc' },
         { lastSeenAt: 'desc' }
       ],
@@ -890,7 +1201,12 @@ export async function listVerifiedEvents(filters = {}) {
     }),
     prisma.hotspotEvent.count({ where }),
     prisma.hotspotEvent.findMany({
-      where: { ...where, sourceItems: undefined },
+      where: {
+        ...where,
+        AND: filterClauses.filter((clause) => !clause.sourceItems).length
+          ? filterClauses.filter((clause) => !clause.sourceItems)
+          : undefined
+      },
       select: { sourceItems: { select: { sourceType: true } } }
     })
   ]);
@@ -901,8 +1217,22 @@ export async function listVerifiedEvents(filters = {}) {
     }
   }
 
+  const keywordTerms = [
+    ...new Set(items.flatMap((event) => keywordTermsForEvent(event)).map((term) => String(term || '').trim()).filter(Boolean))
+  ];
+  const expansionRecords = keywordTerms.length
+    ? await prisma.keywordExpansion.findMany({
+        where: {
+          normalizedKeyword: { in: keywordTerms.map(normalizeExpansionKey) }
+        }
+      })
+    : [];
+  const expansionLookup = new Map(
+    expansionRecords.map((record) => [record.normalizedKeyword, safeJson(record.expandedKeywordsJson, [])])
+  );
+
   return {
-    items: items.map(projectEvent),
+    items: items.map((event) => attachKeywordExpansions(projectEvent(event), expansionLookup)),
     pagination: {
       page,
       pageSize,
@@ -928,7 +1258,8 @@ export async function getVerifiedEvent(id) {
             include: { sourceItem: true }
           }
         }
-      }
+      },
+      feedback: true
     }
   });
   return event ? projectEvent(event) : null;
@@ -947,6 +1278,11 @@ export async function getVerifiedEventEvidence(id) {
       contradiction: event.contradictionScore,
       trust: event.trustScore
     },
+    heatScore: event.heatScore,
+    matchedKeywords: event.matchedKeywords || [],
+    relevanceReason: event.relevanceReason || '',
+    keywordMentioned: event.keywordMentioned,
+    summary: event.aiSummary || '',
     independentSourceCount: event.independentSourceCount,
     hasOfficialSource: event.hasOfficialSource,
     claims: event.claims.map((claim) => ({
@@ -962,7 +1298,14 @@ export async function getVerifiedEventEvidence(id) {
           title: evidence.sourceItem.title,
           url: evidence.sourceItem.originalUrl,
           domain: evidence.sourceItem.publisherDomain,
-          isOfficial: evidence.sourceItem.isOfficial
+          discoverySourceType: evidence.sourceItem.discoverySourceType || evidence.sourceItem.sourceType,
+          sourceAuthorityScore: evidence.sourceItem.sourceAuthorityScore,
+          authorityReason: evidence.sourceItem.authorityReason,
+          officialEntity: evidence.sourceItem.officialEntity,
+          independenceGroup: evidence.sourceItem.independenceGroup,
+          isOfficial: evidence.sourceItem.isOfficial,
+          fetchStatus: evidence.sourceItem.fetchStatus,
+          evidenceFlags: safeJson(evidence.sourceItem.evidenceFlagsJson, [])
         }
       }))
     })),
@@ -972,11 +1315,23 @@ export async function getVerifiedEventEvidence(id) {
       url: source.originalUrl,
       domain: source.publisherDomain,
       publisherName: source.publisherName,
+      discoverySourceType: source.discoverySourceType || source.sourceType,
+      sourceAuthorityScore: source.sourceAuthorityScore,
+      authorityReason: source.authorityReason,
+      officialEntity: source.officialEntity,
+      independenceGroup: source.independenceGroup,
       fetchStatus: source.fetchStatus,
+      engagementJson: source.engagementJson,
       isOfficial: source.isOfficial,
       isSyndicated: source.isSyndicated,
       publishedAt: source.sourcePublishedAt,
       evidenceFlags: safeJson(source.evidenceFlagsJson, [])
+    })),
+    feedback: event.feedback.map((item) => ({
+      id: item.id,
+      type: item.type,
+      note: item.note,
+      createdAt: item.createdAt
     }))
   };
 }
@@ -988,11 +1343,29 @@ export async function saveVerificationFeedback(eventId, payload = {}) {
   }
   const event = await prisma.hotspotEvent.findUnique({ where: { id: eventId } });
   if (!event) throw new Error('热点事件不存在');
-  return prisma.verificationFeedback.create({
-    data: {
-      eventId,
-      type,
-      note: String(payload.note || '').trim().slice(0, 1000) || null
+  return prisma.$transaction(async (tx) => {
+    const feedback = await tx.verificationFeedback.create({
+      data: {
+        eventId,
+        type,
+        note: String(payload.note || '').trim().slice(0, 1000) || null
+      }
+    });
+
+    if (['false_positive', 'cluster_error', 'evidence_error'].includes(type)) {
+      await tx.hotspotEvent.update({
+        where: { id: eventId },
+        data: {
+          verificationStatus: 'rejected',
+          trustScore: 0,
+          verifiedAt: null,
+          riskFlagsJson: JSON.stringify([
+            ...new Set([...safeJson(event.riskFlagsJson, []), `feedback_${type}`])
+          ])
+        }
+      });
     }
+
+    return feedback;
   });
 }

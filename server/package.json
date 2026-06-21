@@ -11,6 +11,7 @@
     "prisma:push": "dotenv -e ../.env -- prisma db push",
     "prisma:deploy": "dotenv -e ../.env -- prisma migrate deploy",
     "db:init": "sqlite3 prisma/dev.db < prisma/init.sql",
+    "eval:golden": "dotenv -e ../.env -- node scripts/evaluateGoldenDataset.js",
     "test": "vitest run"
   },
   "dependencies": {

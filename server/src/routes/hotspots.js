@@ -51,7 +51,7 @@ hotspotRouter.get('/:id/evidence', async (req, res, next) => {
   try {
     const item = await getVerifiedEventEvidence(Number(req.params.id));
     if (!item) {
-      res.status(404).json({ message: '热点证据不存在' });
+      res.status(404).json({ message: '热点内容详情不存在' });
       return;
     }
     res.json(item);

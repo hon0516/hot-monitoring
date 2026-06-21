@@ -60,6 +60,17 @@ export async function dispatchNotifications({ hotspot, settings, trigger = 'sche
 
 export async function dispatchEventNotifications({ event, hotspot, settings, trigger = 'schedule' }) {
   const keywords = hotspot.keywords.map((item) => item.keyword?.term || item.term).filter(Boolean);
+  const blockingFeedbackCount = await prisma.verificationFeedback.count({
+    where: {
+      eventId: event.id,
+      type: { in: ['false_positive', 'cluster_error', 'evidence_error'] }
+    }
+  });
+
+  if (blockingFeedbackCount > 0) {
+    return;
+  }
+
   const existing = await prisma.eventNotificationLog.findMany({
     where: {
       eventId: event.id,
@@ -71,7 +82,7 @@ export async function dispatchEventNotifications({ event, hotspot, settings, tri
 
   if (settings.websocketEnabled && trigger !== 'manual' && !sentChannels.has('websocket')) {
     socketHub.broadcast('hotspot:new', hotspot);
-    socketHub.notify(`发现高可信热点：${hotspot.title}`, hotspot);
+    socketHub.notify(`发现相关热点：${hotspot.title}`, hotspot);
     await prisma.eventNotificationLog.create({
       data: { eventId: event.id, channel: 'websocket', status: 'sent' }
     });

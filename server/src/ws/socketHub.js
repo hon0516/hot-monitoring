@@ -53,6 +53,7 @@ class SocketHub {
 
     return {
       hotspotId: hotspot.id,
+      id: hotspot.id,
       title: hotspot.title,
       sourceType: hotspot.sourceType,
       sourceAuthor: hotspot.sourceAuthor || '',
@@ -62,11 +63,18 @@ class SocketHub {
       importance: hotspot.aiImportance || null,
       heatScore,
       heatLabel: getHeatLabel(heatScore),
-      relevance: hotspot.aiRelevance ?? null,
+      relevance: hotspot.aiRelevance ?? hotspot.relevanceScore ?? null,
+      matchedKeywords: hotspot.matchedKeywords || [],
+      relevanceReason: hotspot.relevanceReason || '',
+      keywordMentioned: hotspot.keywordMentioned ?? null,
       auditStatus: hotspot.auditStatus || null,
       aiConfidence: hotspot.aiConfidence ?? null,
       trustScore: hotspot.trustScore ?? null,
       sourceQualityScore: hotspot.sourceQualityScore ?? null,
+      sourceAuthorityScore: hotspot.sourceAuthorityScore ?? hotspot.sourceQualityScore ?? null,
+      authorityReason: hotspot.authorityReason || '',
+      bodyAvailable: hotspot.bodyAvailable ?? null,
+      feedbackSummary: hotspot.feedbackSummary || { total: 0 },
       evidenceScore: hotspot.evidenceScore ?? null,
       corroborationScore: hotspot.corroborationScore ?? null,
       contradictionScore: hotspot.contradictionScore ?? null,
@@ -80,6 +88,8 @@ class SocketHub {
       evidence: hotspot.aiEvidence || '',
       url: hotspot.url,
       discoveredAt: hotspot.discoveredAt,
+      scannedAt: hotspot.scannedAt || hotspot.lastSeenAt || hotspot.discoveredAt || null,
+      scanIsNew: hotspot.scanIsNew ?? false,
       keywords: hotspot.keywords?.map((item) => item.keyword?.term || item.term).filter(Boolean) || []
     };
   }

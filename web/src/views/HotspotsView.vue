@@ -1,6 +1,6 @@
 <template>
   <div class="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
-    <HotspotFeed :items="sortedHotspots" :show-header="false">
+    <HotspotFeed :items="sortedHotspots" :show-header="false" @feedback-saved="applyFilters">
       <template #actions>
         <div class="flex items-center gap-2">
           <el-tag class="hotspot-chip" round effect="plain">{{ store.pagination.total }} 条记录</el-tag>
@@ -79,20 +79,14 @@
                       <el-option value="hacker-news" label="Hacker News" />
                       <el-option value="twitter" label="推特 / X" />
                       <el-option value="bilibili" label="哔哩哔哩" />
+                      <el-option value="weibo" label="微博" />
+                      <el-option value="weibo-hot" label="微博热搜" />
                       <el-option value="sogou" label="搜狗搜索" />
                     </el-select>
                   </el-form-item>
 
-                  <el-form-item class="mb-0 hotspot-filterbar__field">
-                    <el-select v-model="filters.status" size="small" placeholder="全部状态">
-                      <el-option value="all" label="全部状态" />
-                      <el-option value="trusted" label="可信" />
-                      <el-option value="needs_review" label="待核验" />
-                    </el-select>
-                  </el-form-item>
-
                   <div class="hotspot-toolbar__meta-pill">
-                    {{ verificationStatusHint }}
+                    默认隐藏低相关内容
                   </div>
 
                   <div class="hotspot-filterbar__actions">
@@ -147,6 +141,8 @@ const sourceLabels = {
   'hacker-news': 'Hacker News',
   twitter: '推特 / X',
   bilibili: '哔哩哔哩',
+  weibo: '微博',
+  'weibo-hot': '微博热搜',
   sogou: '搜狗搜索'
 };
 
@@ -159,8 +155,7 @@ const toolbarRoot = ref(null);
 const filters = reactive({
   keyword: '',
   sourceType: '',
-  importance: '',
-  status: 'all'
+  importance: ''
 });
 
 const sortOptions = [
@@ -181,24 +176,10 @@ const activeFilterCount = computed(() => {
   let count = 0;
 
   if (filters.keyword.trim()) count += 1;
-  if (filters.status !== 'all') count += 1;
-
   return count;
 });
 
 const activeControlCount = computed(() => activeFilterCount.value + activeSorts.value.length);
-
-const verificationStatusHint = computed(() => {
-  if (filters.status === 'trusted') {
-    return '仅展示深度核验通过的可信事件';
-  }
-
-  if (filters.status === 'needs_review') {
-    return '仅展示单一来源或证据尚未充分的事件';
-  }
-
-  return '展示可信与待核验事件，已拒绝内容仍保持隐藏';
-});
 
 const sourceTabCounts = computed(() => {
   const counts = {
@@ -208,6 +189,8 @@ const sourceTabCounts = computed(() => {
     'hacker-news': 0,
     twitter: 0,
     bilibili: 0,
+    weibo: 0,
+    'weibo-hot': 0,
     sogou: 0
   };
 
@@ -282,7 +265,6 @@ function resetFilters() {
   filters.keyword = '';
   filters.sourceType = '';
   filters.importance = '';
-  filters.status = 'all';
   activeSourceTab.value = 'all';
   applyFilters();
 }
@@ -333,9 +315,14 @@ function compareByKey(left, right, key) {
 }
 
 function fallbackCompare(left, right) {
-  const trustDiff = numericValue(right.trustScore) - numericValue(left.trustScore);
-  if (trustDiff !== 0) {
-    return trustDiff;
+  const heatDiff = heatScore(right) - heatScore(left);
+  if (heatDiff !== 0) {
+    return heatDiff;
+  }
+
+  const relevanceDiff = numericValue(right.aiRelevance) - numericValue(left.aiRelevance);
+  if (relevanceDiff !== 0) {
+    return relevanceDiff;
   }
 
   const discoveredDiff = normalizeTimestamp(right.discoveredAt) - normalizeTimestamp(left.discoveredAt);

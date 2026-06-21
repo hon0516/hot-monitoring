@@ -201,8 +201,8 @@ textarea {
 .latest-scan-bell {
   position: relative;
   display: inline-grid;
-  width: 42px;
-  height: 42px;
+  width: 32px;
+  height: 32px;
   flex: none;
   place-items: center;
   border: 1px solid rgba(128, 156, 214, 0.22);
@@ -619,6 +619,141 @@ textarea {
     box-shadow 0.22s ease;
 }
 
+.evidence-drawer.el-drawer {
+  background: rgba(5, 12, 24, 0.98);
+  border-left: 1px solid rgba(55, 216, 255, 0.18);
+}
+
+.evidence-drawer .el-drawer__body {
+  padding: 0;
+}
+
+.evidence-panel {
+  min-height: 100%;
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.evidence-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 22px 18px;
+  border-bottom: 1px solid rgba(128, 156, 214, 0.14);
+  background: linear-gradient(100deg, rgba(55, 216, 255, 0.1), transparent 64%);
+}
+
+.evidence-panel__eyebrow,
+.evidence-section__title,
+.evidence-score-card p {
+  margin: 0;
+  color: rgba(55, 216, 255, 0.72);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+}
+
+.evidence-panel__header h2 {
+  margin: 6px 0 0;
+  color: #eff6ff;
+  font-size: 18px;
+  line-height: 1.45;
+}
+
+.evidence-panel__body {
+  display: grid;
+  gap: 16px;
+  padding: 18px 22px 24px;
+}
+
+.evidence-score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.evidence-score-card,
+.evidence-claim,
+.evidence-source,
+.evidence-section {
+  border: 1px solid rgba(128, 156, 214, 0.13);
+  border-radius: var(--radius-10);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.evidence-score-card {
+  padding: 12px;
+}
+
+.evidence-score-card strong {
+  display: block;
+  margin-top: 8px;
+  color: #eff6ff;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 22px;
+}
+
+.evidence-section {
+  padding: 14px;
+}
+
+.evidence-section__title {
+  margin-bottom: 12px;
+}
+
+.evidence-claim,
+.evidence-source {
+  padding: 12px;
+}
+
+.evidence-claim p,
+.evidence-source a {
+  margin: 0;
+  color: #eff6ff;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.evidence-excerpt {
+  border-left: 2px solid rgba(55, 216, 255, 0.32);
+  padding-left: 10px;
+}
+
+.evidence-excerpt p,
+.evidence-source p,
+.evidence-muted,
+.evidence-source__flags {
+  margin: 0;
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.evidence-excerpt span {
+  display: block;
+  margin-top: 4px;
+  color: rgba(55, 216, 255, 0.72);
+  font-size: 11px;
+}
+
+.evidence-source {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.evidence-source__flags {
+  grid-column: 1 / -1;
+  color: rgba(255, 180, 84, 0.86);
+}
+
+@media (max-width: 720px) {
+  .evidence-score-grid,
+  .evidence-source {
+    grid-template-columns: 1fr;
+  }
+}
+
 .hotspot-toolbar__trigger:hover {
   border-color: rgba(55, 216, 255, 0.26);
   transform: translateY(-1px);
@@ -661,6 +796,85 @@ textarea {
   color: #bff7ff;
   font-size: 10px;
   font-weight: 700;
+}
+
+.scan-item-notification {
+  width: min(360px, calc(100vw - 32px)) !important;
+  border: 1px solid rgba(56, 189, 248, 0.32) !important;
+  border-radius: 18px !important;
+  background: linear-gradient(180deg, rgba(8, 16, 32, 0.96), rgba(12, 24, 44, 0.94)) !important;
+  box-shadow: 0 18px 48px rgba(2, 8, 23, 0.45) !important;
+}
+
+.scan-item-notification .el-notification__title {
+  color: #f8fafc !important;
+  font-weight: 700;
+}
+
+.scan-item-notification .el-notification__content {
+  margin: 0;
+  color: #cbd5e1 !important;
+}
+
+.scan-item-notification .el-notification__closeBtn {
+  color: #94a3b8 !important;
+}
+
+.scan-item-notification__body {
+  display: grid;
+  gap: 10px;
+}
+
+.scan-item-notification__row {
+  display: grid;
+  gap: 4px;
+}
+
+.scan-item-notification__label {
+  color: #38bdf8;
+  font-size: 0.74rem;
+}
+
+.scan-item-notification__value {
+  color: #e2e8f0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.scan-item-notification__value--title {
+  color: #f8fafc;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.scan-item-notification__list {
+  display: grid;
+  gap: 6px;
+}
+
+.scan-item-notification__list-item {
+  color: #f8fafc;
+  font-size: 0.94rem;
+  line-height: 1.45;
+  padding-left: 12px;
+  position: relative;
+}
+
+.scan-item-notification__list-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.58em;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.9);
+}
+
+.scan-item-notification__more {
+  color: #94a3b8;
+  font-size: 0.8rem;
 }
 
 .hotspot-toolbar__panel {

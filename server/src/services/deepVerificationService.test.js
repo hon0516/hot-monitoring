@@ -3,7 +3,7 @@ import {
   calculateVerificationScoresForTest,
   finalizeVerificationDecisionForTest
 } from './deepVerificationService.js';
-import { verificationConfig, getSourceAuthority } from '../config/verificationConfig.js';
+import { verificationConfig, getSourceAuthority, matchOfficialSource } from '../config/verificationConfig.js';
 
 function source(overrides = {}) {
   return {
@@ -108,6 +108,28 @@ describe('deep verification scoring', () => {
     expect(verificationConfig.blockedContentTypes).toContain('tutorial');
     expect(decision.verificationStatus).not.toBe('trusted');
   });
+
+  it('keeps missing body content out of the trusted flow', () => {
+    const sources = [
+      source({ publisherDomain: 'example.com', fetchStatus: 'metadata_only' }),
+      source({ publisherDomain: 'another.org', sourceType: 'bing' })
+    ];
+    const claims = [{ statement: 'Codex 发布新能力', status: 'supported', importance: 'core' }];
+    const ruleScores = calculateVerificationScoresForTest({
+      sources,
+      verifiedClaims: claims,
+      understanding: { relevanceScore: 96 }
+    });
+    const decision = finalizeVerificationDecisionForTest({
+      ruleScores,
+      adjudication: { relevanceScore: 96, evidenceScore: 95, corroborationScore: 95, contradictionScore: 0 },
+      understanding: { directlyRelevant: true, contentType: 'news', riskFlags: ['body_unavailable'] },
+      verifiedClaims: claims
+    });
+
+    expect(ruleScores.hasBodyGate).toBe(false);
+    expect(decision.verificationStatus).toBe('needs_review');
+  });
 });
 
 describe('verificationConfig.getSourceAuthority', () => {
@@ -121,5 +143,20 @@ describe('verificationConfig.getSourceAuthority', () => {
 
   it('uses the per-source authority for known sources', () => {
     expect(getSourceAuthority('google-news')).toBe(verificationConfig.sourceAuthority['google-news']);
+  });
+});
+
+describe('verificationConfig.matchOfficialSource', () => {
+  it('matches an official GitHub organization path', () => {
+    const result = matchOfficialSource({ url: 'https://github.com/openai/openai-node' });
+
+    expect(result.isOfficial).toBe(true);
+    expect(result.officialEntity).toBe('OpenAI');
+  });
+
+  it('does not treat arbitrary GitHub repositories as official', () => {
+    const result = matchOfficialSource({ url: 'https://github.com/random-user/openai-example' });
+
+    expect(result.isOfficial).toBe(false);
   });
 });

@@ -27,11 +27,13 @@
                 </RouterLink>
               </nav>
 
-              <div class="flex items-center gap-2 lg:justify-end">
-                <LatestScanBell :inbox="latestScanInbox" @read-item="$emit('read-latest-scan-item', $event)" />
-                <el-button class="nav-action self-start lg:self-auto" type="primary" :loading="loading" round @click="$emit('run-search')">
-                  {{ loading ? '扫描中...' : '立即扫描' }}
-                </el-button>
+              <div class="flex flex-col gap-2 lg:items-end">
+                <div class="flex items-center gap-2 lg:justify-end">
+                  <LatestScanBell :inbox="latestScanInbox" @read-item="$emit('read-latest-scan-item', $event)" />
+                  <el-button class="nav-action self-start lg:self-auto" type="primary" :loading="loading" round @click="$emit('run-search')">
+                    {{ loading ? '扫描中...' : '立即扫描' }}
+                  </el-button>
+                </div>
               </div>
             </div>
           </section>
@@ -61,6 +63,10 @@ const props = defineProps({
   loading: {
     type: Boolean,
     default: false
+  },
+  scanStatus: {
+    type: Object,
+    default: () => ({})
   },
   latestScanInbox: {
     type: Object,

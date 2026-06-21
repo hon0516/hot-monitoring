@@ -2,7 +2,7 @@ import { prisma } from '../db/prisma.js';
 import { projectEvent } from './deepVerificationService.js';
 
 const INBOX_ID = 1;
-const VISIBLE_STATUSES = new Set(['trusted', 'needs_review']);
+const VISIBLE_STATUSES = new Set(['trusted']);
 
 function uniqueVisibleEventIds(items = []) {
   return [
@@ -45,7 +45,7 @@ const inboxInclude = {
       }
     },
     orderBy: [
-      { event: { trustScore: 'desc' } },
+      { event: { heatScore: 'desc' } },
       { event: { relevanceScore: 'desc' } },
       { capturedAt: 'desc' }
     ]

@@ -4,7 +4,7 @@
       <p class="font-mono text-xs uppercase tracking-[0.35em] text-slate-500">控制中心</p>
       <h3 class="mt-2 font-display text-xl text-white">策略与通知</h3>
       <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-        这里定义监控范围、触发阈值和通知通道。建议先把浏览器推送跑通，再补上邮件通知。
+        这里定义监控范围、搜索来源和通知通道。建议先把浏览器推送跑通，再补上邮件通知。
       </p>
     </div>
 
@@ -125,27 +125,13 @@
 
       <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <div class="mb-4">
-          <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">范围与阈值</p>
-          <p class="mt-2 text-sm text-slate-400">设定监控话题范围，以及什么样的结果值得打断你。</p>
+          <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">监控范围</p>
+          <p class="mt-2 text-sm text-slate-400">补充热点搜索和 AI 分析时的监控语境，帮助系统更聚焦地理解你的关注方向。</p>
         </div>
 
         <el-form-item label="监控范围" class="mb-0">
           <el-input v-model="form.scope" placeholder="例如 AI 编程 / Agent / 多模态" />
         </el-form-item>
-
-        <div class="mt-4 grid gap-4 md:grid-cols-2">
-          <el-form-item label="相关性阈值" class="mb-0">
-            <el-input-number v-model.number="form.relevanceThreshold" min="0" max="100" controls-position="right" class="w-full" />
-          </el-form-item>
-          <el-form-item label="通知热度阈值" class="mb-0">
-            <el-select v-model="form.importanceThreshold" class="w-full">
-              <el-option value="low" label="冷" />
-              <el-option value="medium" label="温" />
-              <el-option value="high" label="热" />
-              <el-option value="urgent" label="爆" />
-            </el-select>
-          </el-form-item>
-        </div>
       </section>
 
       <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
@@ -263,6 +249,8 @@ function sourceHealthLabel(value) {
     'hacker-news': 'Hacker News',
     twitter: '推特 / X',
     bilibili: '哔哩哔哩',
+    weibo: '微博',
+    'weibo-hot': '微博热搜',
     sogou: '搜狗搜索'
   };
   return labels[value] || value;
@@ -439,6 +427,13 @@ const searchSourceCards = computed(() => [
     description: '适合追踪中文视频社区里的 AI、产品和教程热度。',
     disabled: false,
     hint: '优先走公开接口，补充视频向内容。'
+  },
+  {
+    key: 'weiboSourceEnabled',
+    title: '微博',
+    description: '适合捕获中文社交讨论和热搜话题，默认按关键词/正文相关度过滤。',
+    disabled: false,
+    hint: props.settings.hasWeiboCookie ? '已检测到微博 Cookie，可尝试实时搜索。' : '未配置 Cookie 时会回退到热搜镜像。'
   },
   {
     key: 'sogouSourceEnabled',

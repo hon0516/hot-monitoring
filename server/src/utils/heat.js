@@ -1,14 +1,3 @@
-const IMPORTANCE_BASE_SCORES = {
-  low: 0,
-  medium: 8,
-  high: 16,
-  urgent: 22
-};
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
 function numericValue(value) {
   if (typeof value === 'string') {
     const normalized = value.trim().toLowerCase();
@@ -31,6 +20,15 @@ function numericValue(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function clampScore(value, max = 100) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(max, Math.round(numeric)));
+}
+
 function parseEngagement(value) {
   if (!value) {
     return null;
@@ -47,54 +45,67 @@ function parseEngagement(value) {
   }
 }
 
-function calculateFreshnessBonus(hotspot, now) {
-  const rawTimestamp = hotspot.sourcePublishedAt || hotspot.discoveredAt;
-  const timestamp = new Date(rawTimestamp || 0).getTime();
-  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+function freshnessBonus(hotspot) {
+  const timestamp = hotspot?.sourcePublishedAt || hotspot?.discoveredAt || hotspot?.firstSeenAt || hotspot?.lastSeenAt;
+  if (!timestamp) {
     return 0;
   }
 
-  const ageHours = Math.max(0, (now.getTime() - timestamp) / (1000 * 60 * 60));
-  return clamp(10 - ageHours / 12, 0, 10);
+  const publishedAt = new Date(timestamp);
+  const ageHours = (Date.now() - publishedAt.getTime()) / (1000 * 60 * 60);
+  if (!Number.isFinite(ageHours) || ageHours < 0) {
+    return 0;
+  }
+
+  if (ageHours <= 6) return 12;
+  if (ageHours <= 24) return 8;
+  if (ageHours <= 72) return 4;
+  return 0;
 }
 
-function calculateEngagementBonus(engagementJson) {
+function calculateFallbackHeat(hotspot, engagement) {
+  const replies = numericValue(engagement?.replies);
+  const quotes = numericValue(engagement?.quotes);
+  const followers = numericValue(engagement?.authorFollowers);
+  const rawHeat = replies * 0.18 + quotes * 0.35 + Math.log10(followers + 1) * 4 + freshnessBonus(hotspot);
+  return clampScore(rawHeat, 45);
+}
+
+export function calculateEngagementHeat(engagementJson, hotspot = {}) {
   const engagement = parseEngagement(engagementJson);
   if (!engagement) {
-    return 0;
+    return calculateFallbackHeat(hotspot, null);
   }
 
-  const views = numericValue(engagement.views || engagement.reads);
-  const reactions =
-    numericValue(engagement.likes) +
-    numericValue(engagement.points) +
-    numericValue(engagement.comments) * 2 +
-    numericValue(engagement.replies) * 2 +
-    numericValue(engagement.retweets) * 1.5;
+  const likes = numericValue(engagement.likes) + numericValue(engagement.points);
+  const retweets =
+    numericValue(engagement.retweets) +
+    numericValue(engagement.shares) +
+    numericValue(engagement.reposts);
+  const views =
+    numericValue(engagement.views) +
+    numericValue(engagement.reads) +
+    numericValue(engagement.play);
 
-  return clamp(Math.log10(views + 1) * 1.5 + Math.log10(reactions + 1) * 2, 0, 10);
+  if (likes > 0 || retweets > 0 || views > 0) {
+    const rawHeat = likes * 1.0 + retweets * 0.65 + Math.log10(views + 1) * 20;
+    return clampScore(rawHeat / 10);
+  }
+
+  return calculateFallbackHeat(hotspot, engagement);
 }
 
-export function calculateHeatScore(hotspot, { now = new Date() } = {}) {
-  const importanceBonus = IMPORTANCE_BASE_SCORES[hotspot?.aiImportance] ?? 0;
-  const relevanceScore = numericValue(hotspot?.aiRelevance) * 0.35;
-  const trustScore = numericValue(hotspot?.trustScore) * 0.25;
-  const sourceQualityScore = numericValue(hotspot?.sourceQualityScore) * 0.1;
-  const credibilityAdjustment = hotspot?.aiIsReal === false || hotspot?.auditStatus === 'noise' ? -12 : 0;
+export function calculateHeatScore(hotspot) {
+  const computed = calculateEngagementHeat(hotspot?.engagementJson, hotspot);
+  if (computed > 0) {
+    return computed;
+  }
 
-  return Math.round(
-    clamp(
-      relevanceScore +
-        trustScore +
-        sourceQualityScore +
-        importanceBonus +
-        calculateFreshnessBonus(hotspot || {}, now) +
-        calculateEngagementBonus(hotspot?.engagementJson) +
-        credibilityAdjustment,
-      0,
-      100
-    )
-  );
+  if (Number.isFinite(Number(hotspot?.heatScore))) {
+    return clampScore(hotspot.heatScore);
+  }
+
+  return 0;
 }
 
 export function getHeatLabel(score) {

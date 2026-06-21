@@ -48,7 +48,7 @@
             class="latest-scan-panel__status"
             :class="`is-${item.event.verificationStatus || 'needs_review'}`"
           >
-            {{ item.event.verificationStatus === 'trusted' ? '可信' : '待核验' }}
+            {{ item.event.verificationStatus === 'trusted' ? '可信' : '相关' }}
           </span>
           <span class="latest-scan-panel__title">{{ item.event.title }}</span>
           <span class="latest-scan-panel__meta">

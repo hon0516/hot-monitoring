@@ -29,6 +29,12 @@
           </el-button>
         </div>
 
+        <div v-if="expandedKeywords.length" class="flex flex-wrap gap-1.5">
+          <el-tag v-for="term in expandedKeywords" :key="term" size="small" round effect="plain" type="info">
+            {{ term }}
+          </el-tag>
+        </div>
+
         <!-- <div class="flex flex-wrap items-center gap-2 text-xs text-slate-400">
           <span class="rounded-[5px] border border-cyan/15 bg-cyan/[0.04] px-2.5 py-1">
             已启用渠道 {{ enabledSourceCount }} 个
@@ -85,12 +91,16 @@ const sourceLabels = {
   'hacker-news': 'Hacker News',
   twitter: '推特 / X',
   bilibili: '哔哩哔哩',
+  weibo: '微博',
+  'weibo-hot': '微博热搜',
   sogou: '搜狗搜索'
 };
 
 const store = useMonitorStore();
 const query = ref(store.searchPanel.query || '');
 const activeSourceTab = ref('all');
+
+const expandedKeywords = computed(() => store.searchPanel.meta.expandedKeywords || []);
 
 const enabledSourceCount = computed(() => {
   if (store.searchPanel.meta.enabledSources.length) {
@@ -119,6 +129,8 @@ const sourceTabCounts = computed(() => {
     'hacker-news': 0,
     twitter: 0,
     bilibili: 0,
+    weibo: 0,
+    'weibo-hot': 0,
     sogou: 0
   };
 
