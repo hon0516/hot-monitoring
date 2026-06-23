@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import re
 import sys
 import urllib.parse
@@ -32,6 +33,7 @@ AGGREGATOR_DOMAINS = {
     "bing.com",
     "duckduckgo.com",
     "sogou.com",
+    "s.weibo.com",
 }
 
 NOISE_WORDS = [
@@ -47,6 +49,7 @@ NOISE_WORDS = [
 
 TUTORIAL_WORDS = ["tutorial", "course", "how to", "guide", "入门", "教程", "课程", "合集", "资料"]
 IMPORTANCE_WORDS = ["launch", "release", "announce", "announces", "unveil", "model", "api", "funding", "security", "发布", "推出", "宣布", "融资", "安全", "模型"]
+SOCIAL_CHANNELS = {"twitter", "weibo", "weibo-hot", "bilibili"}
 
 
 def load_payload(path):
@@ -58,7 +61,11 @@ def load_payload(path):
 
 
 def text_of(item):
-    return " ".join(str(item.get(k) or "") for k in ("title", "content", "source", "url"))
+    author = item.get("author") or {}
+    author_text = ""
+    if isinstance(author, dict):
+        author_text = " ".join(str(author.get(k) or "") for k in ("name", "username", "userName"))
+    return " ".join(str(item.get(k) or "") for k in ("title", "content", "source", "sourceType", "sourceChannel", "url")) + " " + author_text
 
 
 def domain_of(url):
@@ -90,6 +97,50 @@ def clamp(value, low=0, high=100):
     return max(low, min(high, int(round(value))))
 
 
+def channel_of(item):
+    return str(item.get("sourceChannel") or item.get("sourceType") or item.get("source") or "").lower()
+
+
+def engagement_of(item):
+    engagement = item.get("engagement")
+    if not engagement and item.get("engagementJson"):
+        try:
+            engagement = json.loads(item.get("engagementJson"))
+        except (TypeError, json.JSONDecodeError):
+            engagement = None
+    if not isinstance(engagement, dict):
+        engagement = {}
+
+    def number(*keys):
+        for key in keys:
+            value = item.get(key)
+            if value is None:
+                value = engagement.get(key)
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    return {
+        "views": number("views", "viewCount", "play", "reads"),
+        "likes": number("likes", "likeCount", "points"),
+        "reposts": number("retweets", "retweetCount", "shares", "reposts"),
+        "replies": number("comments", "commentCount", "replyCount", "quotes", "quoteCount"),
+        "followers": number("authorFollowers"),
+    }
+
+
+def heat_score(item):
+    engagement = engagement_of(item)
+    raw = engagement["likes"] * 10
+    raw += engagement["reposts"] * 5
+    raw += engagement["replies"] * 3
+    raw += math.log10(max(engagement["views"], 1)) * 8
+    raw += min(15, math.log10(max(engagement["followers"], 1)) * 3)
+    return clamp(raw)
+
+
 def keyword_relevance(item, variants):
     text = text_of(item).casefold()
     title = str(item.get("title") or "").casefold()
@@ -111,11 +162,15 @@ def keyword_relevance(item, variants):
 
 def source_quality(item):
     domain = domain_of(item.get("url"))
-    channel = str(item.get("sourceChannel") or "").lower()
+    channel = channel_of(item)
     if domain in HIGH_QUALITY_DOMAINS:
         return 90
     if channel in {"google-news", "bing-news", "hackernews"}:
         return 75
+    if channel == "bilibili":
+        return 58
+    if channel in {"weibo", "weibo-hot", "twitter"}:
+        return 52
     if domain in AGGREGATOR_DOMAINS:
         return 35
     if domain.endswith(".edu") or domain.endswith(".gov"):
@@ -135,6 +190,8 @@ def evidence_score(item):
         score += 10
     if item.get("source"):
         score += 5
+    if item.get("sourceId"):
+        score += 5
     return clamp(score)
 
 
@@ -142,9 +199,7 @@ def importance_score(item):
     text = text_of(item).casefold()
     score = 40
     score += min(30, sum(8 for word in IMPORTANCE_WORDS if word.casefold() in text))
-    engagement = item.get("engagement") or {}
-    if isinstance(engagement, dict):
-        score += min(20, int((engagement.get("points") or 0) / 20) + int((engagement.get("comments") or 0) / 20))
+    score += min(20, heat_score(item) * 0.2)
     return clamp(score)
 
 
@@ -154,6 +209,7 @@ def flags_for(item, relevance):
     content = str(item.get("content") or "").strip()
     text = text_of(item).casefold()
     domain = domain_of(item.get("url"))
+    channel = channel_of(item)
     if len(title) < 8:
         flags.append("short_title")
     if re.fullmatch(r"[\d\s:：/.-]+", title):
@@ -162,6 +218,8 @@ def flags_for(item, relevance):
         flags.append("duration_title")
     if domain in AGGREGATOR_DOMAINS:
         flags.append("aggregator_url")
+    if channel in SOCIAL_CHANNELS:
+        flags.append("social_signal")
     if any(word in text for word in NOISE_WORDS):
         flags.append("search_noise")
     if any(word.casefold() in text for word in TUTORIAL_WORDS):
@@ -184,13 +242,16 @@ def classify(item, variants):
     penalty += 15 if "aggregator_url" in flags else 0
     penalty += 10 if "tutorial_or_collection" in flags else 0
     penalty += 10 if "missing_snippet" in flags else 0
+    penalty += 6 if "social_signal" in flags and source_score < 60 else 0
     trust = clamp(relevance * 0.45 + source_score * 0.25 + evidence * 0.2 + importance * 0.1 - penalty)
 
     if any(flag in flags for flag in ("search_noise", "numeric_title", "duration_title")):
         status = "noise"
     elif relevance < 35:
         status = "low_relevance"
-    elif trust >= 75 and relevance >= 60:
+    elif trust >= 75 and relevance >= 60 and "social_signal" not in flags:
+        status = "trusted"
+    elif trust >= 82 and relevance >= 70 and source_score >= 58:
         status = "trusted"
     else:
         status = "needs_review"
@@ -206,6 +267,7 @@ def classify(item, variants):
         "sourceQualityScore": source_score,
         "evidenceScore": evidence,
         "importance": importance,
+        "heatScore": heat_score(item),
         "riskFlags": flags,
         "summary": f"此内容与【{variants[0]}】的关联：{item.get('content') or item.get('title') or '候选内容需要进一步核验。'}",
     }

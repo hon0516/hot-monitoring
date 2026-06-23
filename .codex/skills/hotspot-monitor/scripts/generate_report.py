@@ -34,11 +34,13 @@ def render_item(item):
     source = item.get("source") or item.get("domain") or "unknown"
     summary = one_line(item.get("summary") or item.get("content") or title, 180)
     flags = ", ".join(item.get("riskFlags") or []) or "none"
+    heat = item.get("heatScore")
+    heat_text = f" | 热度: {heat}" if heat is not None else ""
     return "\n".join(
         [
             f"- **{title}**",
             f"  摘要: {summary}",
-            f"  来源: {source} | 可信度: {item.get('trustScore', 0)} | 相关性: {item.get('relevanceScore', 0)} | 重要度: {item.get('importance', 0)}",
+            f"  来源: {source} | 可信度: {item.get('trustScore', 0)} | 相关性: {item.get('relevanceScore', 0)} | 重要度: {item.get('importance', 0)}{heat_text}",
             f"  风险标记: {flags} | [原文链接]({url})",
         ]
     )
@@ -88,4 +90,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
