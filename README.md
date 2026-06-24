@@ -1,16 +1,25 @@
 # Hot Monitoring
 
-热点监控工具 MVP，包含：
+热点监控工具，用于按关键词自动采集、校验和通知热点事件。项目由 Vue 前端和 Node.js 后端组成，支持多来源搜索、AI 可信度分析、深度证据校验、实时通知和邮件提醒。
 
-- `web/`: Vue 3 + Vite + TailwindCSS 前端
-- `server/`: Node.js + Express + Prisma + SQLite 后端
+## 功能概览
+
+- 关键词管理：添加、启用、停用和删除监控关键词。
+- 热点流：聚合 Bing、Google News、Hacker News、Twitter/X、B 站、微博、搜狗等来源。
+- 深度校验：对候选内容做相关性、证据、可信度、来源质量和热度评分。
+- 实时搜索：手动触发采集，查看最新扫描 inbox 和来源健康状态。
+- 通知能力：WebSocket 实时推送，可选 SMTP 邮件通知。
+- AI Provider：支持腾讯 TokenHub 和 OpenRouter，可在系统设置页切换。
+
+## 技术栈
+
+- `web/`：Vue 3、Vite、Pinia、Vue Router、Element Plus、Tailwind CSS
+- `server/`：Node.js、Express、Prisma、SQLite、WebSocket、Vitest
+- `server/prisma/`：数据库 schema 与 migration
 
 ## 快速开始
 
-1. 复制环境变量模板
-2. 安装依赖
-3. 初始化数据库
-4. 启动前后端
+建议使用 Node.js 20。
 
 ```bash
 cp .env.example .env
@@ -22,30 +31,107 @@ npm run db:init
 npm run dev
 ```
 
-前端默认运行在 `5173`，后端默认运行在 `3000`。
+默认地址：
 
-`npm run db:init` 现在会通过 Prisma migration 初始化数据库；`server/prisma/init.sql` 仅保留为排障时的后备脚本。
+- 前端：`http://localhost:5173`
+- 后端：`http://localhost:3000`
+- 健康检查：`http://localhost:3000/api/health`
 
-如果想临时停用 Twitter 采集以避免额度消耗，可以在 [`.env`](/Users/hon/Desktop/custom/hot-monitoring/.env) 中设置：
+`npm run db:init` 会通过 Prisma migration 初始化数据库；`server/prisma/init.sql` 仅保留为排障时的后备脚本。
+
+## 环境变量
+
+复制 `.env.example` 后，按需补齐 `.env`。本地开发至少保留：
+
+```env
+PORT=3000
+DATABASE_URL="file:./dev.db"
+VITE_API_BASE="http://localhost:3000"
+```
+
+AI 分析至少配置一个 provider：
+
+```env
+TENCENT_TOKENHUB_API_KEY="your-tokenhub-key"
+TENCENT_TOKENHUB_BASE_URL="https://tokenhub.tencentmaas.com/v1"
+TENCENT_TOKENHUB_MODEL="deepseek-v4-pro-202606"
+
+OPENROUTER_API_KEY="your-openrouter-key"
+OPENROUTER_MODEL="openai/gpt-4o-mini"
+```
+
+常用采集配置：
+
+```env
+TWITTERAPI_IO_KEY=""
+TWITTER_SOURCE_ENABLED="true"
+BILIBILI_COOKIE=""
+WEIBO_COOKIE=""
+```
+
+如果想临时停用 Twitter 采集以避免额度消耗：
 
 ```env
 TWITTER_SOURCE_ENABLED="false"
 ```
 
-AI 提供方仅保留 `腾讯 TokenHub` 与 `OpenRouter`。可以在系统设置页手动切换当前 provider。
+未提供 `WEIBO_COOKIE` 时，微博搜索结果可能更少或直接抓取失败；如果依赖微博来源，建议补齐 `SUB`、`SUBP`、`WBPSESS`、`XSRF-TOKEN` 等 Cookie。
 
-如果你要启用腾讯 TokenHub，请在 [`.env`](/Users/hon/Desktop/custom/hot-monitoring/.env) 中补齐：
-
-```env
-TENCENT_TOKENHUB_API_KEY="your-tokenhub-key"
-TENCENT_TOKENHUB_BASE_URL="https://tokenhub.tencentmaas.com/v1"
-TENCENT_TOKENHUB_MODEL="deepseek-v4-flash"
-```
-
-如果要启用更完整的微博实时搜索结果抓取，可以额外在 [`.env`](/Users/hon/Desktop/custom/hot-monitoring/.env) 中提供微博 Cookie：
+邮件通知需要配置 SMTP：
 
 ```env
-WEIBO_COOKIE="SUB=...; SUBP=...; WBPSESS=...; XSRF-TOKEN=..."
+SMTP_HOST=""
+SMTP_PORT=587
+SMTP_USER=""
+SMTP_PASS=""
+SMTP_FROM=""
 ```
 
-未提供 `WEIBO_COOKIE` 时，微博搜索结果可能更少或直接抓取失败；如果你依赖微博来源，建议补齐该 Cookie。
+embedding 默认开启，用于事件相似度和聚类辅助：
+
+```env
+EMBEDDING_ENABLED="true"
+EMBEDDING_MODEL="Xenova/multilingual-e5-small"
+EMBEDDING_DTYPE="q8"
+EMBEDDING_OFFLINE="false"
+EMBEDDING_SIMILARITY_FLOOR="0.78"
+EMBEDDING_SIMILARITY_CEIL="0.9"
+```
+
+更多 AI 扫描、证据抓取和时间窗口参数见 `.env.example`。
+
+## 常用命令
+
+```bash
+npm run dev          # 同时启动 server 和 web
+npm run dev:server   # 只启动后端
+npm run dev:web      # 只启动前端
+npm run build        # 检查后端并构建前端
+npm run db:generate  # 生成 Prisma Client
+npm run db:init      # 执行 Prisma migration
+npm run db:push      # 开发期同步 Prisma schema
+npm --prefix server test
+npm --prefix server run eval:golden
+```
+
+## 页面入口
+
+- `/hotspots`：热点流、深度校验结果、证据详情和反馈。
+- `/keywords`：关键词管理。
+- `/search`：手动搜索与跨来源探索。
+- `/settings`：监控范围、扫描间隔、AI provider、来源和通知设置。
+
+## API 入口
+
+- `GET /api/health`：服务健康和关键配置状态。
+- `GET /api/hotspots`：热点事件列表。
+- `POST /api/hotspots/search`：手动触发采集。
+- `GET /api/hotspots/search/status`：采集状态。
+- `POST /api/hotspots/explore`：跨来源搜索。
+- `GET /api/sources/health`：来源健康状态。
+- `GET /api/notifications/latest-scan`：最新扫描 inbox。
+- `GET /api/settings` / `PUT /api/settings`：系统设置。
+
+## 部署
+
+Netlify 前端构建配置见 `netlify.toml`。服务器部署和更新流程见 `DEPLOY_UPDATE_GUIDE.md`。
