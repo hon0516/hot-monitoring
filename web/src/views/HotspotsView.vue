@@ -1,11 +1,6 @@
 <template>
   <div class="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
     <HotspotFeed :items="sortedHotspots" :show-header="false" @feedback-saved="applyFilters">
-      <template #actions>
-        <div class="flex items-center gap-2">
-          <el-tag class="hotspot-chip" round effect="plain">{{ store.pagination.total }} 条记录</el-tag>
-        </div>
-      </template>
       <template #toolbar>
         <div ref="toolbarRoot" class="hotspot-toolbar">
           <button
@@ -124,6 +119,23 @@
           </Transition>
         </div>
       </template>
+      <template #footer>
+        <div v-if="store.pagination.total > 0" class="hotspot-pagination">
+          <p class="hotspot-pagination__summary">
+            第 {{ store.pagination.page }} / {{ store.pagination.totalPages }} 页
+          </p>
+          <el-pagination
+            background
+            layout="prev, pager, next, sizes, jumper"
+            :current-page="store.pagination.page"
+            :page-size="store.pagination.pageSize"
+            :page-sizes="[10, 20, 30, 50]"
+            :total="store.pagination.total"
+            @current-change="changePage"
+            @size-change="changePageSize"
+          />
+        </div>
+      </template>
     </HotspotFeed>
   </div>
 </template>
@@ -225,8 +237,13 @@ const sortedHotspots = computed(() => {
 
 function applyFilters() {
   activeSourceTab.value = filters.sourceType || 'all';
+  fetchHotspotsPage(1);
+}
+
+function fetchHotspotsPage(page = store.pagination.page) {
   store.fetchHotspots({
-    ...filters
+    ...filters,
+    page
   });
 }
 
@@ -239,6 +256,15 @@ function selectSourceTab(key) {
   activeSourceTab.value = key;
   filters.sourceType = key === 'all' ? '' : key;
   applyFilters();
+}
+
+function changePage(page) {
+  fetchHotspotsPage(page);
+}
+
+function changePageSize(pageSize) {
+  store.pagination.pageSize = pageSize;
+  fetchHotspotsPage(1);
 }
 
 function handlePointerDown(event) {
@@ -356,3 +382,44 @@ function heatScore(item) {
   return numericValue(item.heatScore);
 }
 </script>
+
+<style scoped>
+.hotspot-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 14px;
+}
+
+.hotspot-pagination__summary {
+  flex: 0 0 auto;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+:deep(.hotspot-pagination .el-pagination) {
+  --el-pagination-bg-color: rgba(255, 255, 255, 0.04);
+  --el-pagination-button-bg-color: rgba(255, 255, 255, 0.04);
+  --el-pagination-hover-color: #67e8f9;
+  --el-pagination-text-color: rgba(226, 232, 240, 0.82);
+  --el-pagination-button-disabled-bg-color: rgba(255, 255, 255, 0.02);
+  --el-pagination-button-disabled-color: rgba(148, 163, 184, 0.45);
+  justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .hotspot-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  :deep(.hotspot-pagination .el-pagination) {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+}
+</style>

@@ -1150,12 +1150,13 @@ function getEventFreshnessWhere() {
 
 export async function listVerifiedEvents(filters = {}) {
   const page = Math.max(1, Number.parseInt(filters.page || '1', 10) || 1);
-  const pageSize = Math.min(50, Math.max(1, Number.parseInt(filters.pageSize || '12', 10) || 12));
+  const pageSize = Math.min(50, Math.max(1, Number.parseInt(filters.pageSize || '10', 10) || 10));
   const requestedStatus = String(filters.status || '').trim();
   const verificationStatus = ['trusted', 'rejected'].includes(requestedStatus) ? requestedStatus : 'trusted';
   const statusFilter = verificationStatus;
   const qualityWhere = buildQualityWhere(filters.quality);
   const filterClauses = [];
+  const sourceAgnosticFilterClauses = [];
   if (filters.sourceType) {
     filterClauses.push({
       sourceItems: {
@@ -1165,8 +1166,11 @@ export async function listVerifiedEvents(filters = {}) {
   }
   if (Object.keys(qualityWhere).length) {
     filterClauses.push(qualityWhere);
+    sourceAgnosticFilterClauses.push(qualityWhere);
   }
-  filterClauses.push(getEventFreshnessWhere());
+  const freshnessWhere = getEventFreshnessWhere();
+  filterClauses.push(freshnessWhere);
+  sourceAgnosticFilterClauses.push(freshnessWhere);
   const where = {
     verificationStatus: statusFilter,
     keywords: filters.keyword
@@ -1186,7 +1190,11 @@ export async function listVerifiedEvents(filters = {}) {
     claims: true,
     feedback: true
   };
-  const [items, total, allForCounts] = await Promise.all([
+  const sourceAgnosticWhere = {
+    ...where,
+    AND: sourceAgnosticFilterClauses.length ? sourceAgnosticFilterClauses : undefined
+  };
+  const [items, total, sourceAgnosticTotal, allForCounts] = await Promise.all([
     prisma.hotspotEvent.findMany({
       where,
       include,
@@ -1200,13 +1208,9 @@ export async function listVerifiedEvents(filters = {}) {
       take: pageSize
     }),
     prisma.hotspotEvent.count({ where }),
+    prisma.hotspotEvent.count({ where: sourceAgnosticWhere }),
     prisma.hotspotEvent.findMany({
-      where: {
-        ...where,
-        AND: filterClauses.filter((clause) => !clause.sourceItems).length
-          ? filterClauses.filter((clause) => !clause.sourceItems)
-          : undefined
-      },
+      where: sourceAgnosticWhere,
       select: { sourceItems: { select: { sourceType: true } } }
     })
   ]);
@@ -1241,7 +1245,7 @@ export async function listVerifiedEvents(filters = {}) {
     },
     meta: {
       verificationStatus,
-      sourceCounts: { all: total, ...sourceCounts }
+      sourceCounts: { all: sourceAgnosticTotal, ...sourceCounts }
     }
   };
 }

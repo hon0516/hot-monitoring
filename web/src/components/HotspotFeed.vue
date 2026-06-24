@@ -159,22 +159,37 @@
       </el-scrollbar>
     </div>
 
+    <div v-if="$slots.footer" class="mt-4 shrink-0">
+      <slot name="footer" />
+    </div>
+
     <el-drawer
       v-model="evidenceDrawerOpen"
-      size="min(720px, 92vw)"
+      size="min(720px, 100vw)"
       direction="rtl"
       class="evidence-drawer"
       :with-header="false"
+      :close-on-press-escape="true"
     >
       <div class="evidence-panel">
         <div class="evidence-panel__header">
-          <div>
+          <div class="min-w-0">
             <p class="evidence-panel__eyebrow">DETAIL</p>
             <h2>{{ selectedHotspot?.title || '内容详情' }}</h2>
           </div>
-          <el-tag v-if="evidence" round :type="auditStatusType(selectedHotspot?.auditStatus)">
-            {{ auditStatusLabel(selectedHotspot) }}
-          </el-tag>
+          <div class="evidence-panel__header-actions">
+            <el-tag v-if="evidence" round :type="auditStatusType(selectedHotspot?.auditStatus)">
+              {{ auditStatusLabel(selectedHotspot) }}
+            </el-tag>
+            <button
+              type="button"
+              class="evidence-panel__close"
+              aria-label="关闭内容详情"
+              @click="evidenceDrawerOpen = false"
+            >
+              <el-icon><Close /></el-icon>
+            </button>
+          </div>
         </div>
 
         <el-skeleton v-if="evidenceLoading" :rows="8" animated />
@@ -256,6 +271,7 @@ import {
   CircleCheckFilled,
   CircleCloseFilled,
   Clock,
+  Close,
   CollectionTag,
   Connection,
   DataAnalysis,

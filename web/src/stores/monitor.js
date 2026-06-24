@@ -13,6 +13,21 @@ const sourceLabels = {
   sogou: '搜狗'
 };
 
+function createSourceCounts(overrides = {}) {
+  return {
+    all: 0,
+    bing: 0,
+    'google-news': 0,
+    'hacker-news': 0,
+    twitter: 0,
+    bilibili: 0,
+    weibo: 0,
+    'weibo-hot': 0,
+    sogou: 0,
+    ...overrides
+  };
+}
+
 function sortHotspotsByDiscoveredAt(collection) {
   collection.sort((left, right) => {
     const heatDiff = Number(right?.heatScore ?? -1) - Number(left?.heatScore ?? -1);
@@ -155,21 +170,11 @@ export const useMonitorStore = defineStore('monitor', {
     },
     pagination: {
       page: 1,
-      pageSize: 12,
+      pageSize: 10,
       total: 0,
       totalPages: 1
     },
-    sourceCounts: {
-      all: 0,
-      bing: 0,
-      'google-news': 0,
-      'hacker-news': 0,
-      twitter: 0,
-      bilibili: 0,
-      weibo: 0,
-      'weibo-hot': 0,
-      sogou: 0
-    },
+    sourceCounts: createSourceCounts(),
     settings: null,
     notifications: [],
     latestScanInbox: {
@@ -311,10 +316,7 @@ export const useMonitorStore = defineStore('monitor', {
       this.hotspots = data.items;
       sortHotspotsByDiscoveredAt(this.hotspots);
       this.pagination = data.pagination;
-      this.sourceCounts = {
-        ...this.sourceCounts,
-        ...(data.meta?.sourceCounts || {})
-      };
+      this.sourceCounts = createSourceCounts(data.meta?.sourceCounts || {});
     },
     async fetchSummary() {
       this.summary = await api.getSummary();
