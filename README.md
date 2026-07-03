@@ -77,6 +77,18 @@ TWITTER_SOURCE_ENABLED="false"
 
 未提供 `WEIBO_COOKIE` 时，微博搜索结果可能更少或直接抓取失败；如果依赖微博来源，建议补齐 `SUB`、`SUBP`、`WBPSESS`、`XSRF-TOKEN` 等 Cookie。
 
+如果服务器无法直接访问 Google News RSS，可为后端出站请求配置代理：
+
+```env
+OUTBOUND_PROXY_URL="http://127.0.0.1:7890"
+# 或分别配置：
+OUTBOUND_HTTPS_PROXY="http://127.0.0.1:7890"
+OUTBOUND_HTTP_PROXY="http://127.0.0.1:7890"
+OUTBOUND_NO_PROXY="localhost,127.0.0.1,::1"
+```
+
+这类代理影响的是后端 Node.js 主动访问外部来源，和 Nginx 把浏览器请求转发到后端的反向代理不是一回事。
+
 邮件通知需要配置 SMTP：
 
 ```env
