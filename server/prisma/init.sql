@@ -19,6 +19,7 @@ CREATE TABLE "Setting" (
   "scope" TEXT NOT NULL DEFAULT 'AI 编程',
   "aiProvider" TEXT NOT NULL DEFAULT 'openrouter',
   "scanIntervalMinutes" INTEGER NOT NULL DEFAULT 30,
+  "autoScanEnabled" BOOLEAN NOT NULL DEFAULT false,
   "emailEnabled" BOOLEAN NOT NULL DEFAULT false,
   "websocketEnabled" BOOLEAN NOT NULL DEFAULT true,
   "recipientEmail" TEXT,

@@ -18,11 +18,15 @@ socketHub.attach(wss);
 
 async function bootstrap() {
   const settings = await ensureSettings();
-  const scanIntervalMinutes = startCollectionScheduler(settings.scanIntervalMinutes);
+  const scanIntervalMinutes = startCollectionScheduler(settings.scanIntervalMinutes, settings.autoScanEnabled);
 
   server.listen(env.port, () => {
     console.log(`Hot monitoring server listening on http://localhost:${env.port}`);
-    console.log(`[cron] 自动扫描已启动，每 ${scanIntervalMinutes} 分钟执行一次`);
+    if (settings.autoScanEnabled) {
+      console.log(`[cron] 自动扫描已启动，每 ${scanIntervalMinutes} 分钟执行一次`);
+    } else {
+      console.log('[cron] 自动扫描已关闭');
+    }
   });
 }
 

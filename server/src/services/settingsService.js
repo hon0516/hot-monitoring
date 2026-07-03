@@ -25,6 +25,7 @@ export async function ensureSettings() {
 export async function getSettingsWithState() {
   const settings = await ensureSettings();
   const aiRuntime = getAiProviderRuntimeStatus(settings.aiProvider);
+  const schedulerState = getCollectionSchedulerState();
 
   return {
     ...settings,
@@ -34,7 +35,8 @@ export async function getSettingsWithState() {
     allowedScanIntervals: ALLOWED_SCAN_INTERVALS,
     aiProviderLabel: aiRuntime.label,
     aiProviderAvailable: aiRuntime.available,
-    schedulerIntervalMinutes: getCollectionSchedulerState().currentScanIntervalMinutes
+    schedulerIntervalMinutes: schedulerState.currentScanIntervalMinutes,
+    schedulerEnabled: schedulerState.enabled
   };
 }
 
@@ -57,6 +59,7 @@ export async function updateSettings(payload) {
     }
     data.scanIntervalMinutes = normalizeScanIntervalMinutes(parsedScanIntervalMinutes);
   }
+  if (typeof payload.autoScanEnabled === 'boolean') data.autoScanEnabled = payload.autoScanEnabled;
   if (typeof payload.emailEnabled === 'boolean') data.emailEnabled = payload.emailEnabled;
   if (typeof payload.websocketEnabled === 'boolean') data.websocketEnabled = payload.websocketEnabled;
   if (typeof payload.recipientEmail === 'string') data.recipientEmail = payload.recipientEmail.trim() || null;
@@ -75,6 +78,6 @@ export async function updateSettings(payload) {
   });
 
   const nextSettings = await ensureSettings();
-  rescheduleCollectionScheduler(nextSettings.scanIntervalMinutes);
+  rescheduleCollectionScheduler(nextSettings.scanIntervalMinutes, nextSettings.autoScanEnabled);
   return getSettingsWithState();
 }

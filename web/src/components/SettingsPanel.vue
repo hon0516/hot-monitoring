@@ -98,10 +98,22 @@
       <section class="rounded-[10px] border border-white/5 bg-white/[0.03] p-4">
         <div class="mb-4">
           <p class="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">扫描节奏</p>
-          <p class="mt-2 text-sm text-slate-400">设置系统自动扫描热点的间隔。保存后后端会立即按新的频率重载定时任务。</p>
+          <p class="mt-2 text-sm text-slate-400">设置系统自动扫描热点的开关和间隔。保存后后端会立即应用新的定时任务状态。</p>
         </div>
 
-        <div class="grid gap-4 md:grid-cols-[minmax(0,240px)_1fr]">
+        <div class="grid gap-4 md:grid-cols-[minmax(0,240px)_minmax(0,240px)_1fr]">
+          <div class="rounded-[10px] border border-white/5 bg-slate-950/40 px-4 py-4">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm text-white">自动扫描</p>
+                <p class="mt-2 text-xs leading-5 text-slate-500">
+                  {{ form.autoScanEnabled ? '定时任务开启' : '仅保留手动扫描' }}
+                </p>
+              </div>
+              <el-switch v-model="form.autoScanEnabled" />
+            </div>
+          </div>
+
           <el-form-item label="自动扫描频率" class="mb-0">
             <el-select v-model="form.scanIntervalMinutes" class="w-full">
               <el-option
@@ -115,9 +127,11 @@
 
           <div class="rounded-[10px] border border-white/5 bg-slate-950/40 px-4 py-4">
             <p class="text-sm text-white">当前自动扫描</p>
-            <p class="mt-2 text-lg text-cyan">每 {{ form.scanIntervalMinutes }} 分钟一次</p>
+            <p class="mt-2 text-lg" :class="form.autoScanEnabled ? 'text-cyan' : 'text-slate-400'">
+              {{ form.autoScanEnabled ? `每 ${form.scanIntervalMinutes} 分钟一次` : '已关闭' }}
+            </p>
             <p class="mt-2 text-xs leading-5 text-slate-500">
-              服务重启后会继续读取这个配置；当前生效中的后端定时器频率是 {{ settings.schedulerIntervalMinutes || form.scanIntervalMinutes }} 分钟。
+              服务重启后会继续读取这个配置；当前后端定时任务{{ settings.schedulerEnabled ? `每 ${settings.schedulerIntervalMinutes || form.scanIntervalMinutes} 分钟执行一次` : '未启用' }}。
             </p>
           </div>
         </div>
@@ -281,6 +295,7 @@ const form = reactive({
   scope: '',
   aiProvider: 'openrouter',
   scanIntervalMinutes: 30,
+  autoScanEnabled: false,
   emailEnabled: false,
   websocketEnabled: true,
   recipientEmail: '',
@@ -302,6 +317,7 @@ watch(
       scope: value.scope,
       aiProvider: value.aiProvider || 'openrouter',
       scanIntervalMinutes: value.scanIntervalMinutes || 30,
+      autoScanEnabled: Boolean(value.autoScanEnabled),
       emailEnabled: value.emailEnabled,
       websocketEnabled: value.websocketEnabled,
       recipientEmail: value.recipientEmail || '',

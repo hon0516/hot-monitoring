@@ -37,6 +37,7 @@ model Setting {
   scope                   String   @default("AI 编程")
   aiProvider              String   @default("openrouter")
   scanIntervalMinutes     Int      @default(30)
+  autoScanEnabled         Boolean  @default(false)
   emailEnabled            Boolean  @default(false)
   websocketEnabled        Boolean  @default(true)
   recipientEmail          String?

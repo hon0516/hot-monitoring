@@ -1,0 +1,1 @@
+ALTER TABLE "Setting" ADD COLUMN "autoScanEnabled" BOOLEAN NOT NULL DEFAULT false;

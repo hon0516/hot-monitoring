@@ -5,6 +5,7 @@ const ALLOWED_SCAN_INTERVALS = [5, 10, 15, 30, 60];
 
 let collectionTask = null;
 let currentScanIntervalMinutes = 30;
+let schedulerEnabled = false;
 
 export function normalizeScanIntervalMinutes(value) {
   const parsed = Number.parseInt(String(value), 10);
@@ -32,16 +33,23 @@ function scheduleCollectionTask(intervalMinutes) {
   });
 
   currentScanIntervalMinutes = normalizedInterval;
+  schedulerEnabled = true;
   return normalizedInterval;
 }
 
-export function startCollectionScheduler(intervalMinutes) {
+export function startCollectionScheduler(intervalMinutes, enabled = true) {
   stopCollectionScheduler();
-  return scheduleCollectionTask(intervalMinutes);
+  currentScanIntervalMinutes = normalizeScanIntervalMinutes(intervalMinutes);
+  if (!enabled) {
+    schedulerEnabled = false;
+    return currentScanIntervalMinutes;
+  }
+
+  return scheduleCollectionTask(currentScanIntervalMinutes);
 }
 
-export function rescheduleCollectionScheduler(intervalMinutes) {
-  return startCollectionScheduler(intervalMinutes);
+export function rescheduleCollectionScheduler(intervalMinutes, enabled = true) {
+  return startCollectionScheduler(intervalMinutes, enabled);
 }
 
 export function stopCollectionScheduler() {
@@ -52,11 +60,13 @@ export function stopCollectionScheduler() {
   collectionTask.stop();
   collectionTask.destroy();
   collectionTask = null;
+  schedulerEnabled = false;
 }
 
 export function getCollectionSchedulerState() {
   return {
-    currentScanIntervalMinutes
+    currentScanIntervalMinutes,
+    enabled: schedulerEnabled
   };
 }
 
