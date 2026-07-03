@@ -99,10 +99,10 @@ SMTP_PASS=""
 SMTP_FROM=""
 ```
 
-embedding 默认开启，用于事件相似度和聚类辅助：
+embedding 是可选增强，用于事件相似度和聚类辅助。默认关闭，避免服务器部署时因 `onnxruntime-node` 二进制包下载失败而中断安装；需要启用时先在服务器确认 `npm --prefix server install @huggingface/transformers` 可以成功，再设置：
 
 ```env
-EMBEDDING_ENABLED="true"
+EMBEDDING_ENABLED="false"
 EMBEDDING_MODEL="Xenova/multilingual-e5-small"
 EMBEDDING_DTYPE="q8"
 EMBEDDING_OFFLINE="false"

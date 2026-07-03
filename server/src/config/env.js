@@ -65,7 +65,7 @@ export const env = {
     firstNonEmpty(process.env.OUTBOUND_HTTPS_PROXY, process.env.HTTPS_PROXY, process.env.https_proxy, process.env.OUTBOUND_PROXY_URL),
   outboundNoProxy: firstNonEmpty(process.env.OUTBOUND_NO_PROXY, process.env.NO_PROXY, process.env.no_proxy),
   allowedOrigin: process.env.VITE_API_BASE ? new URL(process.env.VITE_API_BASE).origin : 'http://localhost:5173',
-  embeddingEnabled: toBoolean(process.env.EMBEDDING_ENABLED, true),
+  embeddingEnabled: toBoolean(process.env.EMBEDDING_ENABLED, false),
   embeddingModel: process.env.EMBEDDING_MODEL || 'Xenova/multilingual-e5-small',
   embeddingDtype: process.env.EMBEDDING_DTYPE || 'q8',
   embeddingOffline: toBoolean(process.env.EMBEDDING_OFFLINE, false),

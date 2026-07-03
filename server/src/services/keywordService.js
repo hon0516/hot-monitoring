@@ -6,6 +6,14 @@ export async function listKeywords() {
   });
 }
 
+export async function countEnabledKeywords() {
+  return prisma.keyword.count({
+    where: {
+      enabled: true
+    }
+  });
+}
+
 export async function createKeyword(payload) {
   const term = payload.term?.trim();
   if (!term) {
@@ -44,4 +52,3 @@ export async function deleteKeyword(id) {
     where: { id }
   });
 }
-

@@ -5,7 +5,7 @@
     :loading="store.loading"
     :scan-status="store.scanStatus"
     :latest-scan-inbox="store.latestScanInbox"
-    @run-search="store.runSearch"
+    @run-search="handleRunSearch"
     @read-latest-scan-item="store.markLatestScanInboxItemRead"
   >
     <RouterView />
@@ -14,7 +14,7 @@
 
 <script setup>
 import { h, onBeforeUnmount, onMounted, watch } from 'vue';
-import { ElNotification } from 'element-plus';
+import { ElMessage, ElNotification } from 'element-plus';
 import AppFrame from './components/AppFrame.vue';
 import { useMonitorStore } from './stores/monitor';
 
@@ -34,6 +34,14 @@ const scanTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
   second: '2-digit',
   hour12: false
 });
+
+async function handleRunSearch() {
+  try {
+    await store.runSearch();
+  } catch (error) {
+    ElMessage.warning(error.message || '扫描启动失败');
+  }
+}
 
 function formatScanTime(value) {
   if (!value) {

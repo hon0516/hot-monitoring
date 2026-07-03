@@ -1,4 +1,5 @@
 import express from 'express';
+import { countEnabledKeywords } from '../services/keywordService.js';
 import {
   getCollectionStatus,
   getHotspotById,
@@ -70,6 +71,12 @@ hotspotRouter.post('/:id/feedback', async (req, res, next) => {
 
 hotspotRouter.post('/search', async (_req, res, next) => {
   try {
+    const enabledKeywordCount = await countEnabledKeywords();
+    if (enabledKeywordCount === 0) {
+      res.status(400).json({ message: '请先添加并启用至少一个关键词，再执行扫描' });
+      return;
+    }
+
     const result = triggerCollection({ trigger: 'manual' });
     res.status(result.accepted ? 202 : 200).json(result);
   } catch (error) {

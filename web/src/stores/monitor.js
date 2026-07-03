@@ -456,6 +456,13 @@ export const useMonitorStore = defineStore('monitor', {
       this.scanStatusPollTimer = null;
     },
     async runSearch() {
+      await this.fetchKeywords();
+      const hasEnabledKeyword = this.keywords.some((keyword) => keyword.enabled && String(keyword.term || '').trim());
+      if (!hasEnabledKeyword) {
+        this.liveMessage = '请先添加并启用至少一个关键词';
+        throw new Error('请先添加并启用至少一个关键词，再执行扫描');
+      }
+
       const result = await api.runSearch();
       this.scanStatus = result.status || this.scanStatus;
       this.loading = this.scanStatus.running;
