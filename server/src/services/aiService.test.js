@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildAnalysisPrompt, expandKeyword, normalizeSummaryForTest, preMatchKeyword } from './aiService.js';
+import {
+  buildAnalysisPrompt,
+  expandKeyword,
+  normalizeSummaryForTest,
+  parseAnalysisResponseForTest,
+  preMatchKeyword
+} from './aiService.js';
 
 describe('ai summary normalization', () => {
   it('wraps plain summary with the required keyword template', () => {
@@ -101,5 +107,55 @@ describe('analysis prompt', () => {
     expect(prompt).toContain('当前日期：2026-06-18');
     expect(prompt).toContain('监控语境：AI 编程');
     expect(prompt).toContain('不要仅凭你已有知识');
+  });
+});
+
+describe('structured AI response parsing', () => {
+  it('parses JSON wrapped in a markdown fence', () => {
+    const parsed = parseAnalysisResponseForTest({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: '```json\n{"isReal":true,"relevance":88}\n```'
+          }
+        }
+      ]
+    });
+
+    expect(parsed.value).toEqual({ isReal: true, relevance: 88 });
+    expect(parsed.finishReason).toBe('stop');
+  });
+
+  it('extracts the first complete JSON object from extra text', () => {
+    const parsed = parseAnalysisResponseForTest({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            content: '好的，结果如下：{"keywords":["Fable 5","Fable AI"]} 以上。'
+          }
+        }
+      ]
+    });
+
+    expect(parsed.value).toEqual({ keywords: ['Fable 5', 'Fable AI'] });
+  });
+
+  it('returns null value with finish reason metadata when JSON is truncated', () => {
+    const parsed = parseAnalysisResponseForTest({
+      choices: [
+        {
+          finish_reason: 'length',
+          message: {
+            content: '{"isReal":true,"relevance":85,"summary":"'
+          }
+        }
+      ]
+    });
+
+    expect(parsed.value).toBeNull();
+    expect(parsed.finishReason).toBe('length');
+    expect(parsed.contentLength).toBeGreaterThan(0);
   });
 });

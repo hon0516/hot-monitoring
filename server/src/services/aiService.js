@@ -1,7 +1,9 @@
 import { env, configState } from '../config/env.js';
 import { stripHtml } from '../sources/sourceClient.js';
 
-const MAX_ANALYSIS_OUTPUT_TOKENS = 120;
+const MAX_ANALYSIS_OUTPUT_TOKENS = 1200;
+const MIN_STRUCTURED_OUTPUT_TOKENS = 1200;
+const STRUCTURED_RETRY_OUTPUT_TOKENS = 1800;
 const MAX_KEYWORD_VARIANTS = 15;
 const VALID_IMPORTANCE = new Set(['low', 'medium', 'high', 'urgent']);
 
@@ -119,17 +121,66 @@ export function getAiProviderRuntimeStatus(provider) {
   };
 }
 
+function stripJsonFence(content) {
+  return String(content || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/iu, '')
+    .replace(/\s*```$/u, '')
+    .trim();
+}
+
+function extractBalancedJsonObject(content) {
+  const text = String(content || '');
+  const start = text.indexOf('{');
+  if (start < 0) {
+    return '';
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1);
+      }
+    }
+  }
+
+  return '';
+}
+
 function safeJsonParse(content) {
+  const cleanContent = stripJsonFence(content);
   try {
-    return JSON.parse(content);
+    return JSON.parse(cleanContent);
   } catch {
-    const match = content.match(/\{[\s\S]*\}/);
-    if (!match) {
+    const jsonObject = extractBalancedJsonObject(cleanContent);
+    if (!jsonObject) {
       return null;
     }
 
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(jsonObject);
     } catch {
       return null;
     }
@@ -231,18 +282,56 @@ async function requestAnalysis({ provider, payload, prompt, maxTokens, temperatu
 
 export async function requestStructuredAnalysis({ settings, prompt, payload, maxTokens = 1200, temperature = 0.1 }) {
   const provider = normalizeAiProvider(settings?.aiProvider);
-  const responsePayload = await requestAnalysis({
-    provider,
-    payload,
-    prompt,
-    maxTokens,
-    temperature
-  });
+  let lastParseResult = null;
+  const attempts = [
+    {
+      prompt,
+      maxTokens: Math.max(maxTokens, MIN_STRUCTURED_OUTPUT_TOKENS)
+    },
+    {
+      prompt: buildStrictJsonPrompt(prompt),
+      maxTokens: Math.max(maxTokens * 2, STRUCTURED_RETRY_OUTPUT_TOKENS)
+    }
+  ];
 
-  return {
-    provider,
-    value: parseAnalysisResponse(responsePayload)
-  };
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    const responsePayload = await requestAnalysis({
+      provider,
+      payload,
+      prompt: attempt.prompt,
+      maxTokens: attempt.maxTokens,
+      temperature
+    });
+    const parseResult = parseAnalysisResponse(responsePayload);
+    if (parseResult.value) {
+      return {
+        provider,
+        value: parseResult.value
+      };
+    }
+
+    lastParseResult = parseResult;
+  }
+
+  throw new Error(formatParseFailure(lastParseResult));
+}
+
+function buildStrictJsonPrompt(prompt) {
+  return `${prompt}
+
+输出约束（必须遵守）：
+- 只输出一个完整、可被 JSON.parse 解析的 JSON 对象。
+- 不要输出 Markdown 代码块、解释、推理过程或前后缀。
+- 字符串字段保持简短，优先少于 80 个汉字。
+- 输出前确认所有双引号、数组和对象括号都已闭合。`;
+}
+
+function formatParseFailure(parseResult) {
+  const finishReason = parseResult?.finishReason || 'unknown';
+  const contentLength = parseResult?.contentLength ?? 0;
+  const sample = parseResult?.contentSample ? ` sample=${JSON.stringify(parseResult.contentSample)}` : '';
+  return `Failed to parse AI response (finish_reason=${finishReason}, content_length=${contentLength})${sample}`;
 }
 
 function formatShanghaiDate(now = new Date()) {
@@ -336,12 +425,8 @@ export async function analyzeContent(content, keyword, preMatchResult, settings 
       prompt: buildAnalysisPrompt(keyword, matchResult, { scope: settings?.scope }),
       payload: String(content || '').slice(0, 2000),
       temperature: 0.2,
-      maxTokens: 500
+      maxTokens: 1200
     });
-
-    if (!result.value) {
-      throw new Error('Failed to parse AI response');
-    }
 
     const analysis = normalizeAnalysisResult(result.value);
     return {
@@ -369,11 +454,27 @@ export async function analyzeContent(content, keyword, preMatchResult, settings 
 function parseAnalysisResponse(responsePayload) {
   const choice = responsePayload?.choices?.[0];
   const content = String(choice?.message?.content || '').trim();
+  const finishReason = String(choice?.finish_reason || '');
+  const contentSample = content.slice(0, 240);
   if (!content) {
-    return null;
+    return {
+      value: null,
+      finishReason,
+      contentLength: 0,
+      contentSample
+    };
   }
 
-  return safeJsonParse(content);
+  return {
+    value: safeJsonParse(content),
+    finishReason,
+    contentLength: content.length,
+    contentSample
+  };
+}
+
+export function parseAnalysisResponseForTest(responsePayload) {
+  return parseAnalysisResponse(responsePayload);
 }
 
 function summarizeFallbackText(item) {
