@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { fetchText } from './sourceClient.js';
 import { buildInternationalQueryVariants, dedupeSourceItems, filterRecentSourceItems } from './sourceQuery.js';
 
 export async function searchGoogleNews({ keyword, scope }) {
@@ -11,17 +12,12 @@ export async function searchGoogleNews({ keyword, scope }) {
       ? { hl: 'en-US', gl: 'US', ceid: 'US:en' }
       : { hl: 'zh-CN', gl: 'CN', ceid: 'CN:zh-Hans' };
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${locale.hl}&gl=${locale.gl}&ceid=${locale.ceid}`;
-    const response = await fetch(url, {
+    const xml = await fetchText(url, {
+      timeoutMs: 15000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
+        Accept: 'application/rss+xml,application/xml;q=0.9,*/*;q=0.8'
       }
     });
-
-    if (!response.ok) {
-      throw new Error(`Google News RSS 抓取失败: ${response.status}`);
-    }
-
-    const xml = await response.text();
     const $ = cheerio.load(xml, { xmlMode: true });
 
     $('item').each((_, element) => {
