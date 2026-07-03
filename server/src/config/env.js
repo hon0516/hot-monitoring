@@ -25,6 +25,9 @@ const toBoolean = (value, fallback = false) => {
   return fallback;
 };
 
+const firstNonEmpty = (...values) =>
+  values.map((value) => String(value || '').trim()).find(Boolean) || '';
+
 export const env = {
   port: toInt(process.env.PORT, 3000),
   databaseUrl: process.env.DATABASE_URL || 'file:./prisma/dev.db',
@@ -56,6 +59,11 @@ export const env = {
   smtpUser: process.env.SMTP_USER || '',
   smtpPass: process.env.SMTP_PASS || '',
   smtpFrom: process.env.SMTP_FROM || '',
+  outboundHttpProxy:
+    firstNonEmpty(process.env.OUTBOUND_HTTP_PROXY, process.env.HTTP_PROXY, process.env.http_proxy, process.env.OUTBOUND_PROXY_URL),
+  outboundHttpsProxy:
+    firstNonEmpty(process.env.OUTBOUND_HTTPS_PROXY, process.env.HTTPS_PROXY, process.env.https_proxy, process.env.OUTBOUND_PROXY_URL),
+  outboundNoProxy: firstNonEmpty(process.env.OUTBOUND_NO_PROXY, process.env.NO_PROXY, process.env.no_proxy),
   allowedOrigin: process.env.VITE_API_BASE ? new URL(process.env.VITE_API_BASE).origin : 'http://localhost:5173',
   embeddingEnabled: toBoolean(process.env.EMBEDDING_ENABLED, true),
   embeddingModel: process.env.EMBEDDING_MODEL || 'Xenova/multilingual-e5-small',
@@ -78,5 +86,6 @@ export const configState = {
   hasBilibiliCookie: Boolean(env.bilibiliCookie),
   hasWeiboCookie: Boolean(env.weiboCookie),
   twitterSourceRuntimeEnabled: env.twitterSourceEnabled,
-  hasSmtpConfig: Boolean(env.smtpHost && env.smtpUser && env.smtpPass && env.smtpFrom)
+  hasSmtpConfig: Boolean(env.smtpHost && env.smtpUser && env.smtpPass && env.smtpFrom),
+  outboundProxyConfigured: Boolean(env.outboundHttpProxy || env.outboundHttpsProxy)
 };

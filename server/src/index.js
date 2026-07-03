@@ -1,11 +1,14 @@
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { env } from './config/env.js';
+import { configureFetchProxy } from './config/fetchProxy.js';
 import { prisma } from './db/prisma.js';
 import { createApp } from './app.js';
 import { ensureSettings } from './services/settingsService.js';
 import { startCollectionScheduler } from './services/schedulerService.js';
 import { socketHub } from './ws/socketHub.js';
+
+configureFetchProxy();
 
 const app = createApp();
 const server = http.createServer(app);

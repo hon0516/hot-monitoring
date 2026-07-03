@@ -24,6 +24,7 @@
     "node-cron": "^4.0.7",
     "nodemailer": "^6.10.1",
     "prisma": "^6.6.0",
+    "undici": "^6.27.0",
     "ws": "^8.18.1"
   },
   "devDependencies": {
