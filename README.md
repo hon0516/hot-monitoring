@@ -144,6 +144,3 @@ npm --prefix server run eval:golden
 - `GET /api/notifications/latest-scan`：最新扫描 inbox。
 - `GET /api/settings` / `PUT /api/settings`：系统设置。
 
-## 部署
-
-Netlify 前端构建配置见 `netlify.toml`。服务器部署和更新流程见 `DEPLOY_UPDATE_GUIDE.md`。
