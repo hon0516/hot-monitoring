@@ -1,5 +1,8 @@
 # Hot Monitoring
 
+[![Latest Release](https://img.shields.io/github/v/release/hon0516/hot-monitoring)](https://github.com/hon0516/hot-monitoring/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 热点监控工具，用于按关键词自动采集、校验和通知热点事件。项目由 Vue 前端和 Node.js 后端组成，支持多来源搜索、AI 可信度分析、深度证据校验、实时通知和邮件提醒。
 
 ## 功能概览
@@ -10,6 +13,20 @@
 - 实时搜索：手动触发采集，查看最新扫描 inbox 和来源健康状态。
 - 通知能力：WebSocket 实时推送，可选 SMTP 邮件通知。
 - AI Provider：支持腾讯 TokenHub 和 OpenRouter，可在系统设置页切换。
+
+## 界面预览
+
+### 热点流
+
+聚合展示多平台热点，支持按来源筛选、查看 AI 摘要与分析结果。
+
+![热点流界面](docs/images/hotspot-feed.png)
+
+### 热点详情与分析
+
+查看热度、相关度、命中词、分析依据和来源内容，并提交人工反馈。
+
+![热点详情与分析界面](docs/images/hotspot-analysis.png)
 
 ## 技术栈
 
@@ -144,3 +161,6 @@ npm --prefix server run eval:golden
 - `GET /api/notifications/latest-scan`：最新扫描 inbox。
 - `GET /api/settings` / `PUT /api/settings`：系统设置。
 
+## License
+
+[MIT](LICENSE)
